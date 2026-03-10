@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import { invalidateVideoCache } from "../lib/videoCache";
 
 interface AddCategoryModalProps {
     open: boolean;
@@ -224,7 +225,7 @@ export default function AddCategoryModal({
     categoryName = "",
     categoryContexts = [],
     categoryExclusions = [],
-    targetIndex = "context-engine-ads",
+    targetIndex = "tl-context-engine-ads",
 }: AddCategoryModalProps) {
     const [name, setName] = useState("");
     const [contexts, setContexts] = useState<string[]>([]);
@@ -424,9 +425,11 @@ export default function AddCategoryModal({
                 body: JSON.stringify({
                     videoURLs: blobUrls,
                     metadata: {
+                        type: "ad",
                         category: videoOnly ? categoryName : name,
-                        targetContexts: videoOnly ? categoryContexts : contexts,
-                        exclusions: videoOnly ? categoryExclusions : exclusions,
+                        slug: (videoOnly ? categoryName : name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
+                        targetContexts: (videoOnly ? categoryContexts : contexts).join(", "),
+                        exclusions: (videoOnly ? categoryExclusions : exclusions).join(", "),
                     },
                     target_index: targetIndex,
                 }),
@@ -483,6 +486,8 @@ export default function AddCategoryModal({
                                     errors: [...prev.errors, `TwelveLabs: ${data.error}`],
                                 }));
                             } else if (eventName === "complete") {
+                                // Invalidate cached video data so next page load fetches fresh
+                                invalidateVideoCache();
                                 setUploadProgress((prev) => ({
                                     ...prev,
                                     phase: "done",

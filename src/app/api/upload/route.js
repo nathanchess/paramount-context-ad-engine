@@ -18,7 +18,11 @@ export async function POST(request) {
             addRandomSuffix: true,
         });
 
-        return NextResponse.json({ url: blob.url, pathname: blob.pathname });
+        // For private stores, downloadUrl is a signed URL that's publicly accessible
+        return NextResponse.json({
+            url: blob.downloadUrl || blob.url,
+            pathname: blob.pathname,
+        });
     } catch (error) {
         console.error('Blob upload error:', error);
         return NextResponse.json(

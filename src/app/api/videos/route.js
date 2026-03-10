@@ -1,33 +1,109 @@
 import { NextResponse } from "next/server"
 import { getTwelveLabsClient, getIndexId } from "../../lib/twelvelabs"
+import { list, put } from '@vercel/blob';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET(request) {
-    try {
-        const { searchParams } = new URL(request.url);
-        const targetIndex = searchParams.get("index") || "context-engine-ads";
 
-        const indexId = await getIndexId(targetIndex);
-        const client = getTwelveLabsClient();
+    const { searchParams } = new URL(request.url)
+    const targetIndex = searchParams.get("index") || "tl-context-engine-ads"
+    const forceRefresh = searchParams.get("refresh") === "true";
 
-        const videosPager = await client.indexes.listVideos(indexId);
-        const videos = [];
+    const tl_client = getTwelveLabsClient()
+    const indexId = await getIndexId(targetIndex)
 
-        for await (const video of videosPager) {
-            videos.push({
-                id: video.id,
-                title: video.title || video.filename,
-                duration: video.duration,
-                metadata: video.userMetadata,
-            });
+    const blobName = `api_video_cache_v2_${indexId}.json`;
+
+    if (!forceRefresh) {
+        try {
+            const { blobs } = await list({ prefix: blobName });
+            if (blobs.length > 0) {
+                console.log(`[DEBUG] Fetching video list from Vercel Blob cache for index ${indexId}`);
+                const cachedRes = await fetch(blobs[0].url);
+                if (cachedRes.ok) {
+                    const cachedData = await cachedRes.json();
+                    return NextResponse.json(cachedData, { status: 200 });
+                }
+            }
+        } catch (e) {
+            console.error("[DEBUG] Error checking blob cache:", e);
+        }
+    }
+
+    console.log(`[DEBUG] Fetching videos for index ${indexId} directly from TwelveLabs...`);
+
+    const videoPager = await tl_client.indexes.videos.list(indexId)
+    const videos = []
+
+    for await (const video of videoPager) {
+        const videoData = await tl_client.indexes.videos.retrieve(
+            indexId,
+            video.id,
+            {
+                embeddingOption: ['visual', 'audio', 'transcription']
+            }
+        )
+
+        let embeddings = [];
+        const segments = videoData.embedding?.videoEmbedding?.segments || [];
+
+        if (segments.length > 0) {
+            embeddings = segments.map(seg => ({
+                startOffsetSec: seg.startOffsetSec,
+                endOffsetSec: seg.endOffsetSec,
+                vector: seg.float
+            }));
         }
 
-        return NextResponse.json({ indexId, videos });
-    } catch (err) {
-        return NextResponse.json(
-            { error: err.message || "Failed to fetch videos" },
-            { status: 500 }
-        );
+        console.log(`[DEBUG] Video ${videoData.id} has ${segments.length} segments`);
+
+        // Explicitly extract fields into a plain serializable object
+        // The SDK may return camelCase or snake_case depending on method
+        const hlsData = videoData.hls || {};
+        const sysMeta = videoData.systemMetadata || {};
+        const rawUserMeta = videoData.userMetadata || videoData.user_metadata || null;
+
+        videos.push({
+            id: videoData.id,
+            createdAt: videoData.createdAt,
+            indexedAt: videoData.indexedAt,
+            systemMetadata: {
+                filename: sysMeta.filename || null,
+                duration: sysMeta.duration || 0,
+                fps: sysMeta.fps || 0,
+                width: sysMeta.width || 0,
+                height: sysMeta.height || 0,
+                size: sysMeta.size || 0,
+            },
+            hls: {
+                videoUrl: hlsData.videoUrl || hlsData.video_url || null,
+                thumbnailUrls: hlsData.thumbnailUrls || hlsData.thumbnail_urls || [],
+                status: hlsData.status || null,
+            },
+            userMetadata: typeof rawUserMeta === 'string'
+                ? rawUserMeta
+                : (rawUserMeta ? JSON.stringify(rawUserMeta) : null),
+            embedding_segments: embeddings,
+        })
     }
+
+    console.log(`[DEBUG] Retrieved ${videos.length} videos from index ${indexId}. Saving to Vercel Blob cache...`);
+
+    try {
+        await put(blobName, JSON.stringify(videos), {
+            access: 'public',
+            addRandomSuffix: false,
+            allowOverwrite: true,
+            contentType: 'application/json'
+        });
+        console.log(`[DEBUG] Saved video list to Vercel Blob: ${blobName}`);
+    } catch (blobErr) {
+        console.error(`[DEBUG] Failed to cache video list for index ${indexId}:`, blobErr);
+    }
+
+    return NextResponse.json(videos, { status: 200 })
+
 }
 
 export async function POST(request) {
@@ -35,31 +111,12 @@ export async function POST(request) {
     // Pass in public video URLs and associated user metadata to add to TwelveLabs index.
     // Video URLS from Vercel Blob storage on client-side upload first.
 
-    let body;
-    try {
-        body = await request.json();
-    } catch {
-        return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
-    }
+    const { videoURLs, metadata, target_index } = await request.json()
 
-    const { videoURLs, metadata, target_index } = body;
+    const tl_client = getTwelveLabsClient()
+    const indexId = await getIndexId(target_index || "tl-context-engine-ads")
 
-    if (!videoURLs || !Array.isArray(videoURLs) || videoURLs.length === 0) {
-        return NextResponse.json({ error: "videoURLs array required" }, { status: 400 });
-    }
-
-    let indexId;
-    try {
-        indexId = await getIndexId(target_index || "context-engine-ads");
-    } catch (err) {
-        return NextResponse.json(
-            { error: `Failed to resolve index: ${err.message}` },
-            { status: 500 }
-        );
-    }
-
-    const client = getTwelveLabsClient();
-    const totalVideos = videoURLs.length;
+    const totalVideos = videoURLs.length
 
     // Stream progress back to the client via SSE
     const stream = new ReadableStream({
@@ -67,11 +124,7 @@ export async function POST(request) {
             const encoder = new TextEncoder()
 
             function send(event, data) {
-                try {
-                    controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
-                } catch {
-                    // stream may be closed by client
-                }
+                controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
             }
 
             send('progress', {
@@ -91,14 +144,16 @@ export async function POST(request) {
                         completed: i,
                         total: totalVideos,
                         percent: Math.round((i / totalVideos) * 100),
-                        message: `Indexing video ${i + 1} of ${totalVideos} on TwelveLabs…`,
+                        message: `Processing video ${i + 1} of ${totalVideos}…`,
                     })
 
-                    const task = await client.tasks.create({
+                    const task = await tl_client.tasks.create({
                         indexId: indexId,
                         videoUrl: videoURL,
-                        userMetadata: JSON.stringify(metadata || {})
+                        enableVideoStream: true,
+                        userMetadata: JSON.stringify(metadata)
                     })
+                    console.log(`[DEBUG] Created task:`, JSON.stringify(task, null, 2));
 
                     send('progress', {
                         completed: i,
@@ -107,12 +162,13 @@ export async function POST(request) {
                         message: `Waiting for TwelveLabs to process video ${i + 1}…`,
                     })
 
-                    const completedTask = await client.tasks.waitForDone(task.id, {
+                    const completedTask = await tl_client.tasks.waitForDone(task.id, {
                         sleepInterval: 5
                     })
+                    console.log(`[DEBUG] Task finished waiting:`, JSON.stringify(completedTask, null, 2));
 
-                    // Fallback in case waitForDone returns void/null
-                    const finalTask = completedTask || await client.tasks.retrieve(task.id);
+                    // Fallback in case waitForDone returns void/null, though it usually returns the task
+                    const finalTask = completedTask || await tl_client.tasks.retrieve(task.id);
 
                     if (finalTask.status !== "ready") {
                         throw new Error(`Task ${finalTask.id} failed with status ${finalTask.status}`)
@@ -148,7 +204,6 @@ export async function POST(request) {
                     })
 
                 } catch (err) {
-                    console.error(`Error processing video ${i + 1}:`, err.message);
                     send('video_error', {
                         index: i,
                         videoUrl: videoURL,
