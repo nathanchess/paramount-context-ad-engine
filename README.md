@@ -1,8 +1,23 @@
-# TwelveLabs DevEx Agent Boilerplate
+# Contextual Ad Engine
 
-![TwelveLabs DevEx Agent Boilerplate](public/thumbnail.png)
+> **Powered by TwelveLabs** — Marengo multimodal embeddings + Pegasus generative scene analysis
 
-An AI-agent-optimized boilerplate for rapidly building TwelveLabs sample apps using the internal **Strand** design system. Pre-configured for **Cursor**, **Claude Code**, and **Antigravity**.
+A full-stack contextual ad placement engine for broadcast and streaming content. Upload video footage, let TwelveLabs' AI models analyze every scene, and watch the engine intelligently rank ads by scene fit, viewer affinity, and brand safety — all in real time.
+
+**Live demo repo:** [github.com/nathanchess/paramount-context-ad-engine](https://github.com/nathanchess/paramount-context-ad-engine)
+
+---
+
+## What It Does
+
+| Feature | Description |
+|---|---|
+| **Scene Analysis** | Pegasus generates time-stamped metadata per segment — sentiment, tone, environment, suitable ad categories, GARM brand-safety flags |
+| **Vector Matching** | Marengo 1024-dim embeddings power cosine similarity between ad creatives and video scenes |
+| **Two-Stage Scoring** | `totalScore = adAffinity × sceneFit` — scene context gates viewer affinity, not the reverse |
+| **Cross-Break Diversity** | No ad wins twice; category caps = `ceil(totalBreaks / 2)` |
+| **Semantic Video Search** | Natural-language search across all indexed content — surfaces matched timestamp clips |
+| **Ad-Injected Preview** | Full broadcast preview with ads injected at computed breaks, skip logic, and downloadable ad plan |
 
 ---
 
@@ -10,215 +25,226 @@ An AI-agent-optimized boilerplate for rapidly building TwelveLabs sample apps us
 
 ### Prerequisites
 
-- Node.js 18+
-- npm, yarn, or pnpm
+- **Node.js 18+**
+- **npm**, yarn, or pnpm
+- A [TwelveLabs account](https://playground.twelvelabs.io/) (free tier works)
+- A [Vercel account](https://vercel.com/) for Blob storage (free tier works)
 
 ### 1. Clone & Install
 
 ```bash
-git clone https://github.com/nathanchess/tl-devex-agent-boilerplate.git
-cd devex-agent-boilerplate
+git clone https://github.com/nathanchess/paramount-context-ad-engine.git
+cd contextual-ad-engine
 npm install
 ```
 
-### 2. Run the Dev Server (Next.js)
+### 2. Set Up Environment Variables
+
+Create a `.env.local` file in the project root:
+
+```bash
+cp .env.example .env.local
+```
+
+Then fill in the values (see [Environment Variables](#environment-variables) below).
+
+### 3. Run the Dev Server
 
 ```bash
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) to see the branded landing page showcasing the Strand design system.
+Open [http://localhost:3000](http://localhost:3000) to see the dashboard.
 
 ---
 
-## Using with AI IDEs
+## Environment Variables
 
-This boilerplate is designed to work with AI coding assistants out of the box. Each IDE automatically reads the Strand design system rules.
+Create `.env.local` with the following keys:
 
-### Cursor
+```env
+# ── TwelveLabs ──────────────────────────────────────────────
+# Your TwelveLabs API key — get it at https://playground.twelvelabs.io/
+TL_API_KEY=tlk_...
 
-The `.cursorrules` file at the repo root instructs Cursor to follow `docs/STRANDS_AGENT_RULES.md`. **No additional setup needed** — just open the project in Cursor and start prompting.
+# The TwelveLabs index ID for your content (broadcast) videos
+# Create one at: https://api.twelvelabs.io/v1.3/indexes
+TL_INDEX_ID=...
 
-### Claude Code
+# The TwelveLabs index ID for your ad creative videos (separate index)
+TL_AD_INDEX_ID=...
 
-The `CLAUDE.md` file at the repo root establishes the project vision and points to the SSOT. Claude Code reads this automatically on session start.
+# ── Vercel Blob ──────────────────────────────────────────────
+# Read/write token for Vercel Blob (stores analysis + embedding caches)
+# Get it from: https://vercel.com/dashboard → Storage → Blob
+BLOB_READ_WRITE_TOKEN=vercel_blob_rw_...
+```
 
-### Antigravity
-
-The `.antigravity/skills/twelvelabs_ui/SKILL.md` agent skill activates whenever UI files are generated or modified. It enforces all Strand rules, including a validation checklist.
+> **Note:** All analysis results are cached to Vercel Blob so subsequent page loads are instant. The engine never re-analyzes a video it has already seen.
 
 ---
 
-## Framework Support
+## How to Get Your API Keys
 
-While the boilerplate ships as a **Next.js** app, the Strand design system is framework-agnostic. All tokens are available as JSON, CSS custom properties, and a Tailwind v3 preset.
+### TwelveLabs API Key (`TL_API_KEY`)
 
-### Next.js (Default)
+1. Go to [playground.twelvelabs.io](https://playground.twelvelabs.io/)
+2. Sign up or log in
+3. Navigate to **API Keys** in your account settings
+4. Create a new key and copy it
 
-Already configured. Tokens are in `src/app/globals.css` via Tailwind v4's `@theme inline` block.
+### TwelveLabs Index IDs (`TL_INDEX_ID`, `TL_AD_INDEX_ID`)
 
-### React (Vite / CRA)
+1. In the TwelveLabs dashboard, go to **Indexes**
+2. Create two indexes:
+   - One for **content videos** (your broadcast footage) — this is `TL_INDEX_ID`
+   - One for **ad creatives** (your ad inventory videos) — this is `TL_AD_INDEX_ID`
+3. Make sure both indexes have the **Marengo** engine enabled (for embeddings) and **Pegasus** enabled (for analysis)
 
-1. Copy the `strand/` folder into your React project
-2. Configure Tailwind:
+### Vercel Blob Token (`BLOB_READ_WRITE_TOKEN`)
 
-```js
-// tailwind.config.js
-const strandPreset = require('./strand/tailwind-preset.js');
-module.exports = {
-  presets: [strandPreset],
-  content: ['./src/**/*.{js,ts,jsx,tsx}'],
-};
-```
-
-3. Import fonts and variables in your entry CSS:
-
-```css
-/* src/index.css */
-@import '../strand/css/fonts.css';
-@import '../strand/css/variables.css';
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-```
-
-### Vue
-
-1. Copy the `strand/` folder into your Vue project
-2. Configure Tailwind (same as React):
-
-```js
-// tailwind.config.js
-const strandPreset = require('./strand/tailwind-preset.js');
-module.exports = {
-  presets: [strandPreset],
-  content: ['./src/**/*.{vue,js,ts,jsx,tsx}'],
-};
-```
-
-3. Import fonts and variables:
-
-```css
-/* src/assets/main.css */
-@import '../../strand/css/fonts.css';
-@import '../../strand/css/variables.css';
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-```
-
-Or use **raw CSS variables** without Tailwind:
-
-```vue
-<style>
-@import '../../strand/css/variables.css';
-@import '../../strand/css/fonts.css';
-
-.my-component {
-  background: var(--strand-ui-background);
-  color: var(--strand-ui-text-primary);
-  font-family: var(--strand-font-system);
-}
-</style>
-```
+1. Go to [vercel.com/dashboard](https://vercel.com/dashboard)
+2. Navigate to **Storage** → **Blob**
+3. Create a new Blob store
+4. Copy the `BLOB_READ_WRITE_TOKEN` from the store's settings
 
 ---
 
-## Repository Structure
+## Project Structure
 
 ```
-├── strand/                      # Strand design system (source of truth for tokens)
-│   ├── tokens/                  # Design tokens (JSON)
-│   │   ├── colors.json          #   Color palette (brand, gray, semantic, product)
-│   │   ├── typography.json      #   Font families and size scale
-│   │   ├── spacing.json         #   Spacing, sizing, layout
-│   │   ├── radii.json           #   Border radius
-│   │   ├── shadows.json         #   Box shadows
-│   │   ├── buttons.json         #   Button sizes, variants, hover behavior
-│   │   └── icons.json           #   Icon manifest
-│   ├── css/
-│   │   ├── variables.css        #   All tokens as CSS custom properties
-│   │   └── fonts.css            #   Font @import declarations
-│   ├── icons/                   #   81 SVG icons (16×16, stroke-based)
-│   ├── assets/                  #   Logo files (full, mark, wordmark)
-│   ├── components/              #   Figma Code Connect mappings
-│   ├── tailwind-preset.js       #   Tailwind v3 preset (for React/Vue)
-│   └── python/brand.py          #   Python brand constants
+src/app/
+├── page.tsx                          # Overview landing page
+├── layout.tsx                        # Root layout (nav, fonts)
+├── globals.css                       # Tailwind v4 + Strand design tokens
 │
-├── src/app/                     # Next.js App Router
-│   ├── globals.css              #   Strand tokens via Tailwind v4 @theme inline
-│   ├── layout.tsx               #   Root layout with Strand fonts
-│   └── page.tsx                 #   Landing page (design system showcase)
+├── video-inventory/
+│   ├── page.tsx                      # Video library with semantic search
+│   └── [videoId]/
+│       ├── page.tsx                  # Video detail — ad placement engine UI
+│       └── generate/
+│           └── page.tsx              # Ad-injected preview page
 │
-├── docs/
-│   └── STRANDS_AGENT_RULES.md   #   ★ THE SSOT — complete design system spec
+├── ad-inventory/
+│   ├── page.tsx                      # Ad category listing
+│   └── [slug]/
+│       ├── page.tsx                  # Ad category detail + semantic search
+│       └── [videoId]/
+│           └── page.tsx              # Individual ad creative analysis
 │
-├── .cursorrules                 #   Cursor IDE → reads SSOT
-├── CLAUDE.md                    #   Claude Code → project vision + SSOT
-├── .antigravity/skills/
-│   └── twelvelabs_ui/SKILL.md   #   Antigravity → agent skill enforcing Strand
+├── api/
+│   ├── analyze/route.js              # Pegasus scene analysis (cached)
+│   ├── search/route.js               # Marengo semantic search
+│   ├── videos/route.js               # Video index fetching + caching
+│   ├── upload/route.js               # Video upload to TwelveLabs
+│   ├── embeddings/route.js           # Marengo segment embeddings (cached)
+│   ├── adInventory/route.js          # Ad inventory with vectors
+│   ├── affinityMatching/route.js     # User → ad affinity scoring
+│   └── generateAdPlan/route.js       # Ad placement plan generation
 │
-└── README.md                    #   ← You are here
+├── lib/
+│   ├── adPlacementEngine.ts          # Core scoring engine (pure functions)
+│   ├── types.ts                      # Shared TypeScript interfaces
+│   ├── videoCache.ts                 # localStorage video cache hook
+│   └── adInventoryStore.ts           # Ad category store (client-side)
+│
+└── components/
+    ├── VideoCard.tsx                 # Video card with hover preview + search match
+    ├── SegmentTimeline.tsx           # Scene segment timeline visualization
+    ├── VideoInventoryUploadModal.tsx # Upload modal
+    └── RecommendedAdsPlaceholder.tsx # Ad recommendation placeholder
 ```
 
 ---
 
-## Key Design Rules
+## Architecture Overview
 
-These rules are enforced by all AI IDE configurations:
-
-| Rule | Details |
-|------|---------|
-| **No hardcoded hex colors** | Use Strand Tailwind classes or `var(--strand-*)` CSS variables |
-| **Noto Sans, not Inter** | Primary body font is Noto Sans; Inter is legacy fallback only |
-| **4px spacing grid** | All spacing values must be multiples of 4px |
-| **Dark mode via class** | Add `class="dark"` to `<html>` — never use `prefers-color-scheme` |
-| **Button variants only** | 6 sizes × 11 variants from `strand/tokens/buttons.json` |
-| **Hover radius bump** | Button border-radius increases one token step on hover |
-| **Icons: 16×16 SVG** | Use icons from `strand/icons/`, stroke-based with `currentColor` |
-| **Max widths** | Content: 1200px, Chat: 800px, Header height: 56px |
-
-For the complete specification, see **[docs/STRANDS_AGENT_RULES.md](docs/STRANDS_AGENT_RULES.md)**.
+```
+Raw Video Footage
+      │
+      ▼
+TwelveLabs Index (Marengo + Pegasus)
+      │
+      ├─ Marengo → 1024-dim embeddings per segment (stored in Vercel Blob)
+      └─ Pegasus → Scene metadata: sentiment, tone, environment, GARM, ad categories
+                             │
+                             ▼
+              Ad Placement Engine (client-side, deterministic)
+                             │
+              ┌──────────────┴──────────────┐
+              │                             │
+         identifyAdBreaks              rankAdsForBreak
+         (weighted scoring             (adAffinity × sceneFit)
+          + greedy spacing)                 │
+              │                             │
+              └──────────────┬──────────────┘
+                             │
+                    selectAdsWithDiversity
+                    (cross-break exclusions
+                     + category caps)
+                             │
+                             ▼
+                    Ad-Injected Preview
+                    (HLS player + ad overlay)
+```
 
 ---
 
-## Token Quick Reference
+## The Scoring Formula
 
-### Colors
+```
+totalScore = adAffinity × sceneFit
 
-| Category | Example Classes | Example Hex |
-|----------|----------------|-------------|
-| Brand | `bg-brand-green`, `text-brand-charcoal` | `#00FF00`, `#1D1C1B` |
-| Semantic | `bg-background`, `bg-surface`, `bg-card` | Auto light/dark |
-| Text | `text-text-primary`, `text-text-secondary` | Auto light/dark |
-| Accent | `bg-accent`, `hover:bg-accent-hover` | `#00DC82` |
-| Product | `bg-product-search`, `bg-product-generate` | `#F6AFFF`, `#FABA17` |
+adAffinity = user.ad_category_affinities[ad.category_key]
+             (pre-computed from /ad-inventory eligibility cache)
 
-### Gradient
-
-```css
-background: linear-gradient(90deg, #60E21B, #FABA17, #FFB0CD);
+sceneFit =
+  suitableMatch  × 0.15   # Pegasus suitable_categories overlap
+  environmentFit × 0.15   # Environment × category affinity lookup
+  toneCompat     × 0.10   # Emotional tone compatibility
+  contextMatch   × 0.60   # Marengo cosine similarity (dominant signal)
 ```
 
-### Fonts
+The cosine similarity is stretched from the expected raw range `[0.35, 0.75]` to `[0, 1]` and raised to the power of `1.5` to exaggerate meaningful differences.
 
-| Stack | Tailwind | Fonts |
-|-------|----------|-------|
-| Brand | `font-brand` | Milling Duplex 1mm → Noto Sans → Helvetica |
-| System | `font-system` | Noto Sans → Helvetica → Arial |
-| Code | `font-mono` | IBM Plex Mono |
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Frontend | Next.js 15 + React 19 (App Router) |
+| Video AI | TwelveLabs API (Marengo + Pegasus) |
+| Ad Engine | TypeScript pure functions + `useMemo` |
+| Styling | Tailwind CSS v4 + Strand Design System |
+| Storage | Vercel Blob (analysis + embedding cache) |
+| Streaming | HLS.js + CloudFront CDN |
+
+---
+
+## Running in Production
+
+```bash
+npm run build
+npm start
+```
+
+Or deploy to Vercel — all environment variables need to be set in the Vercel project settings.
 
 ---
 
 ## Contributing
 
-1. **Do not modify `strand/`** — it's the canonical design system. Changes go through the design team.
-2. Always run `npm run build` before committing to verify the build passes.
-3. When adding new components, follow the patterns in `docs/STRANDS_AGENT_RULES.md`.
-4. When using an AI IDE, let it know you're in this boilerplate — it will auto-apply the rules.
+1. Do not modify `strand/` — it's the canonical TwelveLabs design system
+2. All new UI components should follow `docs/STRANDS_AGENT_RULES.md`
+3. Run `npm run build` before committing to catch TypeScript errors
 
 ---
 
 ## License
 
 Private — TwelveLabs internal use only.
+
+---
+
+*Built by Nathan Che · Powered by [TwelveLabs](https://www.twelvelabs.io)*

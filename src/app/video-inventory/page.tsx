@@ -1,6 +1,10 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
+import { useVideos } from "../lib/videoCache";
+import VideoInventoryUploadModal from "../components/VideoInventoryUploadModal";
+import VideoCard from "../components/VideoCard";
+import Link from "next/link";
 
 const genres = [
     "All Genres",
@@ -12,25 +16,15 @@ const genres = [
     "Music",
     "Gaming",
     "Lifestyle",
-    "Documentary",
 ];
 
 const samplePrompts = [
-    "Find scenes with people celebrating",
-    "Outdoor adventure footage with mountains",
-    "Close-up product shots on a table",
-    "People talking in a meeting room",
-    "Sports highlights with crowd cheering",
-    "Cooking or food preparation scenes",
-];
-
-const placeholderVideos = [
-    { id: "1", title: "Introduction to Machine Learning", genre: "Technology", duration: "12:34" },
-    { id: "2", title: "Morning Workout Routine", genre: "Lifestyle", duration: "8:15" },
-    { id: "3", title: "Breaking News Compilation", genre: "News", duration: "24:02" },
-    { id: "4", title: "Guitar Lessons for Beginners", genre: "Music", duration: "18:47" },
-    { id: "5", title: "Championship Highlights", genre: "Sports", duration: "6:30" },
-    { id: "6", title: "The Future of Space Exploration", genre: "Documentary", duration: "45:12" },
+    "People celebrating at a party",
+    "Outdoor sports or athletic activity",
+    "Dramatic indoor conversation",
+    "Luxury lifestyle or upscale setting",
+    "Comedic or lighthearted scene",
+    "Nature or outdoor adventure",
 ];
 
 const searchIcon = (
@@ -39,11 +33,11 @@ const searchIcon = (
     </svg>
 );
 
-const playIcon = (
-    <svg viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-5 h-5">
-        <path fillRule="evenodd" clipRule="evenodd" d="M5.55217 4.79058V7.20942L7.26522 6L5.55217 4.79058ZM4.5 4.315C4.5 3.65679 5.23462 3.27103 5.76926 3.64849L8.15593 5.33348C8.61469 5.65737 8.61469 6.34263 8.15593 6.66652L5.76926 8.35151C5.23462 8.72897 4.5 8.34321 4.5 7.685V4.315Z" fill="currentColor" />
-    </svg>
+const plusIcon = (
+    <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 ml-[-2px]"><path d="M12 5V19M5 12H19" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
 );
+
+type SearchResult = { videoId: string; start: number; end: number; confidence: string; score: number };
 
 export default function VideoInventoryPage() {
     const [searchQuery, setSearchQuery] = useState("");
@@ -53,53 +47,100 @@ export default function VideoInventoryPage() {
     const [genreOpen, setGenreOpen] = useState(false);
     const searchRef = useRef<HTMLDivElement>(null);
     const genreRef = useRef<HTMLDivElement>(null);
+    const [showUploadModal, setShowUploadModal] = useState(false);
+
+    // Semantic search state
+    const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
+    const [isSearching, setIsSearching] = useState(false);
+
+    // Fetch Videos for the generic inventory index
+    const { videos: allVideos, loading: videosLoading, refresh: refreshVideos } = useVideos("tl-context-engine-videos");
+
+    // Debounced semantic search via TwelveLabs /api/search
+    useEffect(() => {
+        if (!searchQuery.trim()) {
+            setSearchResults(null);
+            return;
+        }
+        const timer = setTimeout(async () => {
+            setIsSearching(true);
+            try {
+                const res = await fetch("/api/search", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ query: searchQuery, indexName: "tl-context-engine-videos" }),
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    setSearchResults(data.results || []);
+                }
+            } catch (err) {
+                console.error("[video-inventory] Search failed:", err);
+            } finally {
+                setIsSearching(false);
+            }
+        }, 500);
+        return () => clearTimeout(timer);
+    }, [searchQuery]);
 
     useEffect(() => {
         function handleClickOutside(e: MouseEvent) {
-            if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
-                setShowPrompts(false);
-            }
             if (genreRef.current && !genreRef.current.contains(e.target as Node)) {
                 setGenreOpen(false);
+            }
+            if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
+                setShowPrompts(false);
             }
         }
         document.addEventListener("mousedown", handleClickOutside);
         return () => document.removeEventListener("mousedown", handleClickOutside);
     }, []);
 
-    const filteredVideos = placeholderVideos.filter((v) => {
-        const matchesGenre = selectedGenre === "All Genres" || v.genre === selectedGenre;
-        const matchesSearch =
-            !searchQuery ||
-            v.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            v.genre.toLowerCase().includes(searchQuery.toLowerCase());
-        return matchesGenre && matchesSearch;
-    });
+    // When a search is active, show only matched videos; otherwise show all.
+    // Match on both video.id (TwelveLabs videoId) and video.hls?.videoUrl as fallback.
+    const filteredVideos = useMemo(() => {
+        if (searchQuery.trim() && searchResults) {
+            const matchedIds = new Set(searchResults.map((r) => r.videoId));
+            return allVideos.filter((v) => matchedIds.has(v.id) || matchedIds.has(v.hls?.videoUrl ?? ""));
+        }
+        return allVideos;
+    }, [allVideos, searchQuery, searchResults]);
 
     return (
         <div className="min-h-screen bg-white">
-            <header className="border-b border-border-light px-8 py-6">
-                <h1 className="text-[32px] font-bold tracking-[-1.5px] text-text-primary">
-                    Video Inventory
-                </h1>
-                <p className="text-sm text-text-secondary mt-1">
-                    Search, browse, and manage your video content library.
-                </p>
+            <header className="border-b border-border-light px-8 py-6 flex justify-between items-start">
+                <div>
+                    <h1 className="text-[32px] font-bold tracking-[-1.5px] text-text-primary">
+                        Video Inventory
+                    </h1>
+                    <p className="text-sm text-text-secondary mt-1">
+                        Semantic search, browse, and upload your content library. Powered by TwelveLabs Marengo.
+                    </p>
+                </div>
+                <button
+                    onClick={() => setShowUploadModal(true)}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-text-primary text-white rounded-lg font-medium text-sm transition-all duration-200 shadow-sm hover:shadow-md hover:bg-black hover:rounded-2xl"
+                >
+                    {plusIcon}
+                    Upload Videos
+                </button>
             </header>
 
             {/* ── Search + Genre Filter ─────────────────────────── */}
             <div className="px-8 pt-6 pb-2">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-4">
                     {/* ── Gradient search bar ────────────────────────── */}
-                    <div ref={searchRef} className="relative flex-1 max-w-[560px]">
+                    <div ref={searchRef} className="relative flex-1 max-w-[600px]">
                         <div className={`gradient-search-wrapper ${searchFocused ? "active" : ""}`}>
                             <div className="gradient-search-inner flex items-center">
                                 <span className={`pl-4 transition-colors duration-200 ${searchFocused ? "text-text-primary" : "text-text-tertiary"}`}>
-                                    {searchIcon}
+                                    {isSearching
+                                        ? <svg className="w-4 h-4 animate-spin" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1.5" strokeDasharray="14 8" /></svg>
+                                        : searchIcon}
                                 </span>
                                 <input
                                     type="text"
-                                    placeholder="Search videos by content, scene, or dialogue..."
+                                    placeholder="Semantic search — describe a scene, emotion, or moment..."
                                     value={searchQuery}
                                     onChange={(e) => {
                                         setSearchQuery(e.target.value);
@@ -114,7 +155,7 @@ export default function VideoInventoryPage() {
                                 />
                                 {searchQuery && (
                                     <button
-                                        onClick={() => setSearchQuery("")}
+                                        onClick={() => { setSearchQuery(""); setSearchResults(null); }}
                                         className="pr-4 text-text-tertiary hover:text-text-primary transition-colors"
                                     >
                                         <svg viewBox="0 0 12 12" fill="none" className="w-3.5 h-3.5">
@@ -128,10 +169,12 @@ export default function VideoInventoryPage() {
                         {/* Sample Prompts Dropdown */}
                         {showPrompts && searchFocused && (
                             <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-xl border border-border-light shadow-lg z-20 animate-fade-in overflow-hidden">
-                                <div className="px-4 py-2.5 border-b border-border-light">
-                                    <p className="text-[10px] font-semibold uppercase tracking-[1.5px] text-text-tertiary">
-                                        Try a sample prompt
-                                    </p>
+                                <div className="px-4 py-2.5 border-b border-border-light flex items-center gap-2">
+                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-indigo-50 border border-indigo-200 text-[9px] font-semibold text-indigo-700 uppercase tracking-wider">
+                                        <svg viewBox="0 0 8 8" fill="none" className="w-2 h-2"><circle cx="4" cy="4" r="3" stroke="currentColor" strokeWidth="1"/></svg>
+                                        Marengo Semantic Search
+                                    </span>
+                                    <p className="text-[10px] text-text-tertiary">Try a sample prompt</p>
                                 </div>
                                 {samplePrompts.map((prompt, i) => (
                                     <button
@@ -213,42 +256,119 @@ export default function VideoInventoryPage() {
                 </div>
             </div>
 
-            {/* ── Video Grid ────────────────────────────────────── */}
-            <div className="px-8 py-6">
-                {filteredVideos.length > 0 ? (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                        {filteredVideos.map((video) => (
-                            <div
-                                key={video.id}
-                                className="group rounded-2xl border border-border-light overflow-hidden hover-lift cursor-pointer"
-                            >
-                                <div className="relative aspect-video bg-gray-100 flex items-center justify-center">
-                                    <div className="w-12 h-12 rounded-full bg-white/80 backdrop-blur-sm flex items-center justify-center text-text-tertiary group-hover:text-text-primary group-hover:bg-white group-hover:shadow-md transition-all duration-200">
-                                        {playIcon}
-                                    </div>
-                                    <span className="absolute bottom-2 right-2 px-2 py-0.5 rounded-md bg-gray-700/80 text-[10px] font-medium text-white backdrop-blur-sm">
-                                        {video.duration}
-                                    </span>
-                                </div>
-                                <div className="p-4">
-                                    <h3 className="text-sm font-medium text-text-primary mb-1 line-clamp-1">{video.title}</h3>
-                                    <span className="inline-block px-2 py-0.5 rounded-full bg-gray-50 text-[11px] font-medium text-text-secondary">
-                                        {video.genre}
-                                    </span>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                ) : (
-                    <div className="flex flex-col items-center justify-center py-20 rounded-2xl border border-border-light">
-                        <div className="w-12 h-12 rounded-full bg-gray-50 flex items-center justify-center mb-4">
-                            <span className="text-text-tertiary">{searchIcon}</span>
-                        </div>
-                        <p className="text-sm font-medium text-text-primary mb-1">No results found</p>
-                        <p className="text-sm text-text-tertiary">Try adjusting your search or filter.</p>
+            {/* ── Content Grid ─────────────────────────────────── */}
+            <main className="px-8 pb-12">
+                {/* Search status bar */}
+                {searchQuery && (
+                    <div className="mb-4 flex items-center gap-3">
+                        {isSearching ? (
+                            <span className="flex items-center gap-2 text-xs text-text-tertiary">
+                                <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1.5" strokeDasharray="14 8" /></svg>
+                                Searching across all videos semantically…
+                            </span>
+                        ) : searchResults !== null ? (
+                            <span className="text-xs text-text-secondary">
+                                <span className="font-semibold text-text-primary">{filteredVideos.length}</span> video{filteredVideos.length !== 1 ? "s" : ""} matched &ldquo;{searchQuery}&rdquo;
+                                {searchResults.length > 0 && (
+                                    <span className="ml-1.5 text-text-tertiary">— cards show matched timestamps</span>
+                                )}
+                            </span>
+                        ) : null}
+                        <button
+                            onClick={() => { setSearchQuery(""); setSearchResults(null); }}
+                            className="ml-auto text-xs text-text-tertiary hover:text-text-primary transition-colors"
+                        >
+                            Clear search
+                        </button>
                     </div>
                 )}
-            </div>
+
+                {videosLoading ? (
+                    <div className="flex justify-center items-center py-20">
+                        <div className="flex gap-2">
+                            <div className="w-2 h-2 rounded-full bg-text-tertiary animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                            <div className="w-2 h-2 rounded-full bg-text-tertiary animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                            <div className="w-2 h-2 rounded-full bg-text-tertiary animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                        </div>
+                    </div>
+                ) : allVideos.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-24 text-center">
+                        <div className="relative w-24 h-24 mb-6 grayscale opacity-20 hover:grayscale-0 hover:opacity-100 transition-all duration-500 cursor-pointer">
+                            <svg viewBox="0 0 460 300" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full drop-shadow-lg">
+                                <path fillRule="evenodd" clipRule="evenodd" d="M129.6 1L193.3 154.2H129.6L129.6 1ZM65.8015 1L129.502 154.2H65.8015L65.8015 1Z" fill="#F45C45" />
+                                <path fillRule="evenodd" clipRule="evenodd" d="M129.6 307.3L193.2 154.2H129.6V307.3ZM65.8015 307.3L129.402 154.2H65.8015V307.3Z" fill="#2ED1A8" />
+                                <path fillRule="evenodd" clipRule="evenodd" d="M193.4 1H257.099L193.4 154.2V1ZM257.2 1L320.9 154.2H257.2L257.2 1Z" fill="#F8B122" />
+                                <path fillRule="evenodd" clipRule="evenodd" d="M193.4 307.3H257.099L193.4 154.2V307.3ZM257.2 307.3H320.9L257.2 154.2V307.3Z" fill="#7581FF" />
+                                <path fillRule="evenodd" clipRule="evenodd" d="M0 1H63.6997L0 154.2V1Z" fill="#F8B122" />
+                            </svg>
+                        </div>
+                        <h3 className="text-xl font-semibold text-text-primary mb-2 tracking-tight">Your Video Inventory is Empty</h3>
+                        <p className="text-sm text-text-secondary max-w-md mx-auto mb-6">
+                            Upload your video content to have TwelveLabs automatically analyze, index, and prepare it for highly-relevant contextual ad insertion.
+                        </p>
+                        <button
+                            onClick={() => setShowUploadModal(true)}
+                            className="flex items-center gap-1.5 px-6 py-2.5 bg-text-primary text-white rounded-lg font-medium text-sm transition-all duration-200 shadow-sm hover:shadow-md hover:bg-black hover:rounded-2xl"
+                        >
+                            {plusIcon}
+                            Upload First Video
+                        </button>
+                    </div>
+                ) : filteredVideos.length === 0 && searchQuery ? (
+                    <div className="flex flex-col items-center justify-center py-16 rounded-2xl border border-border-light">
+                        <div className="w-10 h-10 rounded-full bg-gray-50 flex items-center justify-center mb-3">
+                            {searchIcon}
+                        </div>
+                        <p className="text-sm font-medium text-text-primary mb-1">No videos matched your search</p>
+                        <p className="text-sm text-text-tertiary mb-4">Try rephrasing your query or describe different visual elements.</p>
+                        <button onClick={() => { setSearchQuery(""); setSearchResults(null); }} className="text-sm text-text-secondary hover:text-text-primary font-medium transition-colors">
+                            Clear search
+                        </button>
+                    </div>
+                ) : filteredVideos.length === 0 ? (
+                    <div className="py-16 text-center">
+                        <p className="text-text-secondary mb-2 border border-border-light rounded-2xl max-w-md mx-auto py-3 bg-gray-50 text-sm">No videos match your criteria.</p>
+                        <button onClick={() => { setSearchQuery(""); setSelectedGenre("All Genres"); }} className="text-mb-pink-dark text-sm font-semibold hover:underline">
+                            Clear filters
+                        </button>
+                    </div>
+                ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                        {filteredVideos.map((video) => {
+                            const match = searchResults?.find((r) => r.videoId === video.id || r.videoId === video.hls?.videoUrl);
+                            return (
+                                <div key={video.id}>
+                                    <VideoCard video={video} viewType="video-inventory" searchMatch={match} />
+                                    {match && (
+                                        <div className="mt-1.5 flex items-center gap-1.5 px-0.5">
+                                            <svg viewBox="0 0 12 12" fill="none" className="w-3 h-3 text-mb-green-dark shrink-0">
+                                                <path d="M6 1v10M1 6h10" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                                            </svg>
+                                            <span className="text-[10px] text-text-tertiary">
+                                                Match at{" "}
+                                                <span className="text-text-secondary font-medium">
+                                                    {Math.floor(match.start / 60)}:{String(Math.floor(match.start % 60)).padStart(2, "0")}
+                                                    {" "}–{" "}
+                                                    {Math.floor(match.end / 60)}:{String(Math.floor(match.end % 60)).padStart(2, "0")}
+                                                </span>
+                                                <span className="ml-1 capitalize text-text-tertiary">· {match.confidence}</span>
+                                            </span>
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+            </main>
+
+            <VideoInventoryUploadModal
+                open={showUploadModal}
+                onClose={() => {
+                    setShowUploadModal(false);
+                    refreshVideos();
+                }}
+            />
         </div>
     );
 }

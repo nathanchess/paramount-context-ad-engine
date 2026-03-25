@@ -1,33 +1,26 @@
-import { put } from '@vercel/blob';
+import { handleUpload } from '@vercel/blob/client';
 import { NextResponse } from 'next/server';
 
 export async function POST(request) {
+    const body = await request.json();
+
     try {
-        const formData = await request.formData();
-        const file = formData.get('file');
-
-        if (!file || typeof file === 'string') {
-            return NextResponse.json(
-                { error: 'No file provided' },
-                { status: 400 }
-            );
-        }
-
-        const blob = await put(file.name, file, {
-            access: 'public',
-            addRandomSuffix: true,
+        const jsonResponse = await handleUpload({
+            body,
+            request,
+            onBeforeGenerateToken: async (pathname) => {
+                return {
+                    allowedContentTypes: ['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/x-matroska', 'video/webm'],
+                    maximumSizeInBytes: 10 * 1024 * 1024 * 1024, // 10GB limit
+                };
+            },
         });
 
-        // For private stores, downloadUrl is a signed URL that's publicly accessible
-        return NextResponse.json({
-            url: blob.downloadUrl || blob.url,
-            pathname: blob.pathname,
-        });
+        return NextResponse.json(jsonResponse);
     } catch (error) {
-        console.error('Blob upload error:', error);
         return NextResponse.json(
-            { error: error.message || 'Upload failed' },
-            { status: 500 }
+            { error: error.message },
+            { status: 400 } // The client will also get this error
         );
     }
 }

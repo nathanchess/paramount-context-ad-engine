@@ -13,6 +13,7 @@ import {
     type AdCategory,
 } from "../../lib/adInventoryStore";
 import { useVideos, invalidateVideoCache, type CachedVideo } from "../../lib/videoCache";
+import VideoCard from "../../components/VideoCard";
 
 /* ── Types ──────────────────────────────────────────────── */
 type TLVideo = CachedVideo;
@@ -55,163 +56,7 @@ const exclusionSuggestions = [
     "Health/diet content", "Urban luxury", "Sedentary", "Political", "Religious",
 ];
 
-/* ── HLS Video Card Component ───────────────────────────── */
-function VideoCard({ video, slug, searchMatch }: { video: TLVideo; slug: string; searchMatch?: { start: number, end: number, confidence: string, score?: number } }) {
-    const filename = video.systemMetadata?.filename || "Untitled";
-    const duration = video.systemMetadata?.duration || 0;
-    const thumbnailUrl = searchMatch && video.hls?.thumbnailUrls ? video.hls.thumbnailUrls[Math.min(Math.floor(searchMatch.start), video.hls.thumbnailUrls.length - 1)] || video.hls?.thumbnailUrls?.[0] : video.hls?.thumbnailUrls?.[0];
-    const hlsUrl = video.hls?.videoUrl;
-    const videoRef = useRef<HTMLVideoElement>(null);
-    const hlsRef = useRef<Hls | null>(null);
-    const hoveringRef = useRef(false);
-    const rafRef = useRef<number>(0);
-    const [hovering, setHovering] = useState(false);
-    const [progress, setProgress] = useState(0);
 
-    const meta = parseUserMeta(video.userMetadata);
-
-    // Cleanup on unmount
-    useEffect(() => {
-        return () => {
-            cancelAnimationFrame(rafRef.current);
-            if (hlsRef.current) {
-                hlsRef.current.destroy();
-                hlsRef.current = null;
-            }
-        };
-    }, []);
-
-    function tick() {
-        if (videoRef.current && hoveringRef.current) {
-            const pct = videoRef.current.duration
-                ? (videoRef.current.currentTime / videoRef.current.duration) * 100
-                : 0;
-            setProgress(pct);
-            rafRef.current = requestAnimationFrame(tick);
-        }
-    }
-
-    function handleMouseEnter() {
-        hoveringRef.current = true;
-        setHovering(true);
-        const el = videoRef.current;
-        if (!el || !hlsUrl) return;
-
-        if (Hls.isSupported() && hlsUrl.includes(".m3u8")) {
-            if (!hlsRef.current) {
-                const hls = new Hls({ enableWorker: false });
-                hls.loadSource(hlsUrl);
-                hls.attachMedia(el);
-                hls.on(Hls.Events.MANIFEST_PARSED, () => {
-                    if (searchMatch) el.currentTime = searchMatch.start;
-                    el.play().catch(() => { });
-                    tick();
-                });
-                hlsRef.current = hls;
-            } else {
-                if (searchMatch) el.currentTime = searchMatch.start;
-                el.play().catch(() => { });
-                tick();
-            }
-        } else {
-            // Safari native HLS or direct URL
-            if (!el.src) el.src = hlsUrl;
-            if (searchMatch) el.currentTime = searchMatch.start;
-            el.play().catch(() => { });
-            tick();
-        }
-    }
-
-    function handleMouseLeave() {
-        hoveringRef.current = false;
-        setHovering(false);
-        setProgress(0);
-        cancelAnimationFrame(rafRef.current);
-        if (videoRef.current) {
-            videoRef.current.pause();
-            videoRef.current.currentTime = 0;
-        }
-    }
-
-    return (
-        <div className="relative group">
-            <div className="absolute -inset-0.5 bg-gradient-to-r from-mb-green-dark via-amber-500 to-mb-pink-dark rounded-xl opacity-0 group-hover:opacity-100 group-hover:blur transition-all duration-300 z-0" />
-
-            <Link
-                href={`/ad-inventory/${slug}/${video.id}`}
-                className="block relative rounded-xl border border-border-light overflow-hidden bg-white z-10 hover:-translate-y-1 transition-all duration-200"
-                onMouseEnter={handleMouseEnter}
-                onMouseLeave={handleMouseLeave}
-            >
-                {/* Thumbnail / Video Preview */}
-                <div className="relative aspect-video bg-gray-100 overflow-hidden">
-                    {/* Video element is always mounted so HLS can attach */}
-                    {hlsUrl && (
-                        <video
-                            ref={videoRef}
-                            loop
-                            muted
-                            playsInline
-                            preload="none"
-                            className="absolute inset-0 w-full h-full object-cover transition-opacity duration-200"
-                            style={{ opacity: hovering ? 1 : 0, zIndex: hovering ? 2 : 0 }}
-                        />
-                    )}
-
-                    {/* Thumbnail / placeholder (behind video) */}
-                    {thumbnailUrl ? (
-                        <img src={thumbnailUrl} alt={filename} className="absolute inset-0 w-full h-full object-cover" style={{ zIndex: 1 }} />
-                    ) : (
-                        <div className="absolute inset-0 w-full h-full flex items-center justify-center" style={{ zIndex: 1 }}>
-                            <svg viewBox="0 0 24 24" fill="none" className="w-10 h-10 text-text-tertiary/40">
-                                <rect x="2" y="4" width="20" height="16" rx="3" stroke="currentColor" strokeWidth="1.5" />
-                                <path d="M10 9.5L15 12L10 14.5V9.5Z" fill="currentColor" />
-                            </svg>
-                        </div>
-                    )}
-
-                    {/* Duration badge & Match Badge */}
-                    {searchMatch && (
-                        <div className="absolute top-2 left-2 px-2 py-1 rounded bg-mb-green-dark/90 text-white text-[10px] font-bold shadow-sm backdrop-blur-sm z-10 flex items-center gap-1.5 border border-white/20">
-                            <span className="flex items-center gap-1">
-                                <svg viewBox="0 0 12 12" fill="none" className="w-3 h-3"><path d="M6 2v8M2 6h8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" /></svg>
-                                {formatDuration(searchMatch.start)}
-                            </span>
-                        </div>
-                    )}
-                    {duration > 0 && (
-                        <span className="absolute bottom-2 right-2 px-2 py-0.5 rounded-md bg-gray-900/80 text-[10px] font-medium text-white shadow-sm backdrop-blur-sm pointer-events-none group-data-[hover=true]:opacity-0 transition-opacity duration-200" style={{ zIndex: 3 }}>
-                            {formatDuration(duration)}
-                        </span>
-                    )}
-
-                    {/* Hover progress bar */}
-                    {hovering && (
-                        <div className="absolute bottom-0 left-0 right-0 h-[3px] bg-white/20" style={{ zIndex: 4 }}>
-                            {searchMatch && duration > 0 && (
-                                <div
-                                    className="absolute top-0 bottom-0 bg-mb-pink-dark/80 z-10"
-                                    style={{
-                                        left: `${(searchMatch.start / duration) * 100}%`,
-                                        width: `${(Math.max(searchMatch.end - searchMatch.start, 1) / duration) * 100}%`
-                                    }}
-                                />
-                            )}
-                            <div className="absolute top-0 bottom-0 left-0 bg-white/80 transition-[width] duration-75 z-20" style={{ width: `${progress}%` }} />
-                        </div>
-                    )}
-                </div>
-
-                {/* Info */}
-                <div className="px-3.5 py-3 bg-white">
-                    <p className="text-sm font-medium text-text-primary truncate">
-                        {filename.replace(/\.[^.]+$/, "").replace(/-[A-Za-z0-9]{20,}/g, "")}
-                    </p>
-                </div>
-            </Link>
-        </div>
-    );
-}
 
 /* ── Main Page ──────────────────────────────────────────── */
 export default function AdCategoryDetailPage() {
@@ -656,7 +501,7 @@ export default function AdCategoryDetailPage() {
                                     <p className="text-sm text-text-tertiary">Loading videos…</p>
                                 </div>
                             ) : displayVideos.length > 0 ? (
-                                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                                     {displayVideos.map((video) => {
                                         const match = searchResults?.find(r => r.videoId === video.id || r.videoId === video.hls?.videoUrl);
                                         return <VideoCard key={video.id} video={video} slug={slug} searchMatch={match} />;

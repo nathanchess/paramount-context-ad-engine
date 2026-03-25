@@ -8,6 +8,7 @@ export async function GET(request) {
 
     const { searchParams } = new URL(request.url)
     const targetIndex = searchParams.get("index") || "tl-context-engine-ads"
+    console.log(`[DEBUG] /api/videos requested with targetIndex="${targetIndex}"`);
     const forceRefresh = searchParams.get("refresh") === "true";
 
     const tl_client = getTwelveLabsClient()
@@ -19,19 +20,30 @@ export async function GET(request) {
         try {
             const { blobs } = await list({ prefix: blobName });
             if (blobs.length > 0) {
-                console.log(`[DEBUG] Fetching video list from Vercel Blob cache for index ${indexId}`);
+                console.log(`[DEBUG] Fetching video list from Vercel Blob cache for indexId=${indexId} (indexName=${targetIndex})`);
                 const cachedRes = await fetch(blobs[0].url);
                 if (cachedRes.ok) {
                     const cachedData = await cachedRes.json();
-                    return NextResponse.json(cachedData, { status: 200 });
+                    const count = Array.isArray(cachedData) ? cachedData.length : 0;
+                    console.log(`[DEBUG] Blob cache for indexName=${targetIndex} contains ${count} videos.`);
+
+                    // Only short‑circuit if cache actually has videos.
+                    if (count > 0) {
+                        console.log(`[DEBUG] Returning cached videos for indexName=${targetIndex}`);
+                        return NextResponse.json(cachedData, { status: 200 });
+                    } else {
+                        console.log(`[DEBUG] Blob cache for indexName=${targetIndex} is empty, falling back to live TwelveLabs fetch.`);
+                    }
                 }
+            } else {
+                console.log(`[DEBUG] No blob cache found for indexName=${targetIndex}, will fetch from TwelveLabs.`);
             }
         } catch (e) {
             console.error("[DEBUG] Error checking blob cache:", e);
         }
     }
 
-    console.log(`[DEBUG] Fetching videos for index ${indexId} directly from TwelveLabs...`);
+    console.log(`[DEBUG] Fetching videos for indexId=${indexId} (indexName=${targetIndex}) directly from TwelveLabs...`);
 
     const videoPager = await tl_client.indexes.videos.list(indexId)
     const videos = []
@@ -88,7 +100,18 @@ export async function GET(request) {
         })
     }
 
-    console.log(`[DEBUG] Retrieved ${videos.length} videos from index ${indexId}. Saving to Vercel Blob cache...`);
+    console.log(`[DEBUG] Retrieved ${videos.length} videos from indexId=${indexId} (indexName=${targetIndex}).`);
+    if (videos.length > 0) {
+        console.log(
+            "[DEBUG] Example videos:",
+            videos.slice(0, 3).map(v => ({
+                id: v.id,
+                filename: v.systemMetadata?.filename,
+                duration: v.systemMetadata?.duration
+            }))
+        );
+    }
+    console.log(`[DEBUG] Saving video list to Vercel Blob cache key=${blobName}...`);
 
     try {
         await put(blobName, JSON.stringify(videos), {
@@ -122,9 +145,16 @@ export async function POST(request) {
     const stream = new ReadableStream({
         async start(controller) {
             const encoder = new TextEncoder()
+            let isClosed = false;
 
             function send(event, data) {
-                controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
+                if (isClosed) return;
+                try {
+                    controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
+                } catch (e) {
+                    console.log('[DEBUG] SSE stream closed by client');
+                    isClosed = true;
+                }
             }
 
             send('progress', {
@@ -137,6 +167,8 @@ export async function POST(request) {
             const videoData = []
 
             for (let i = 0; i < videoURLs.length; i++) {
+                if (isClosed) break;
+                
                 const videoURL = videoURLs[i]
 
                 try {
@@ -215,14 +247,20 @@ export async function POST(request) {
                 }
             }
 
-            send('complete', {
-                completed: totalVideos,
-                total: totalVideos,
-                percent: 100,
-                videos: videoData,
-            })
+            if (!isClosed) {
+                send('complete', {
+                    completed: totalVideos,
+                    total: totalVideos,
+                    percent: 100,
+                    videos: videoData,
+                })
 
-            controller.close()
+                try {
+                    controller.close()
+                } catch (e) {
+                    console.error('[DEBUG] Error closing already closed stream');
+                }
+            }
         }
     })
 

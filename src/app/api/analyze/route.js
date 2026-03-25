@@ -2,6 +2,8 @@ import { TwelveLabs } from "twelvelabs-js"
 import { NextResponse } from "next/server"
 import { list, put } from '@vercel/blob';
 
+export const maxDuration = 120;
+
 const tl_client = new TwelveLabs({
     apiKey: process.env.TL_API_KEY
 })
@@ -46,7 +48,9 @@ export async function POST(request) {
 
         // 2. Not cached - Generate from TwelveLabs
         console.log(`[DEBUG] Generating new analysis for ${videoId} via TwelveLabs...`);
-        const result = await tl_client.analyze(parameters)
+        const result = await tl_client.analyze(parameters, {
+            timeoutInSeconds: 90,
+        })
 
         // 3. Save to Vercel Blob for future loads
         try {

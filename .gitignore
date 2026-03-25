@@ -27,11 +27,15 @@
 /.cursorrules
 .cursorrules
 CLAUDE.md
+/.agents
+/footage
 
 # vercel files
 /clear_blobs.js
 /test_search.js
 /test_search_sdk.js
+/skills-lock.json
+
 
 # misc
 .DS_Store

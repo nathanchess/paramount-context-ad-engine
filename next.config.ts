@@ -1,7 +1,12 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  experimental: {
+    serverActions: {
+      bodySizeLimit: '10gb',
+    },
+  },
+  serverExternalPackages: ['twelvelabs-js'],
 };
 
 export default nextConfig;

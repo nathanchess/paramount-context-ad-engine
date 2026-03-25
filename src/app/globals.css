@@ -198,6 +198,18 @@ button img {
   }
 }
 
+/* All interactive controls get pointer cursor globally */
+button,
+[role="button"],
+input[type="range"],
+select {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
 @keyframes modalIn {
   from {
     opacity: 0;

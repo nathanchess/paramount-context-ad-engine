@@ -1,359 +1,419 @@
 import { NextResponse } from "next/server";
-import { getTwelveLabsClient } from "../../lib/twelvelabs";
 
-// --- 1. Cosine Similarity Helper ---
-function cosineSimilarity(vecA, vecB) {
-    if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
-    let dotProduct = 0;
-    let normA = 0;
-    let normB = 0;
-    for (let i = 0; i < vecA.length; i++) {
-        dotProduct += vecA[i] * vecB[i];
-        normA += vecA[i] * vecA[i];
-        normB += vecB[i] * vecB[i];
-    }
-    if (normA === 0 || normB === 0) return 0;
-    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+function clamp01(n) {
+    return Math.max(0, Math.min(1, n));
 }
 
-// --- 2. TwelveLabs Text Embedding Helper ---
-async function generateTextEmbedding(text) {
-    const tl_client = getTwelveLabsClient();
-    try {
-        const response = await tl_client.embed.v2.create({
-            inputType: 'text',
-            modelName: 'marengo3.0',
-            text: {
-                inputText: text
-            }
-        });
-
-        console.log(`[TextEmbedding] Created for "${text}". Embeddings count: ${response?.data?.length}`);
-
-        // Adjusted for Marengo 3.0 v2 SDK output structure
-        if (response.data && response.data.length > 0) {
-            return response.data[0].embedding; // Changed from textEmbeddings[0].float
-        }
-    } catch (error) {
-        console.error("Text embedding error:", error);
+function inferAgeBand(demographics) {
+    for (const tag of demographics || []) {
+        const t = String(tag).toLowerCase().trim();
+        const rawAge = t.match(/^(\d{1,2})$/);
+        if (rawAge) return { band: "exact", value: parseInt(rawAge[1], 10) };
+        const decade = t.match(/^(\d)0s$/);
+        if (decade) return { band: "decade", value: parseInt(decade[1], 10) * 10 };
+        if (t.includes("teen")) return { band: "decade", value: 10 };
     }
     return null;
 }
 
-// --- 3. OpenAI Audience Evaluator ---
-async function evaluateAudienceWithLLM(userInterests, formattedAdAffinities) {
-    if (!process.env.OPENAI_API_KEY) {
-        console.warn("[Audience LLM] Missing OPENAI_API_KEY. Defaulting to string match.");
-        // Fallback to basic string matching if no API key is provided
-        // We flatten the formatted affinities back into a simple array for the fallback string match
-        const flatAffinities = (typeof formattedAdAffinities === 'string'
-            ? formattedAdAffinities.split('\n').filter(line => line.startsWith('-')).map(line => line.replace('- ', ''))
-            : []);
-
-        const audienceMatches = flatAffinities.filter(tag => {
-            const t = tag.toLowerCase().trim();
-            return userInterests.some(uTag => {
-                const ut = uTag.toLowerCase().trim();
-                return ut.includes(t) || t.includes(ut);
-            });
-        });
-        if (audienceMatches.length > 0) return { score: 20, reason: `Viewer aligns with brand target (${audienceMatches.join(', ')})` };
-        if (flatAffinities.length > 0) return { score: 0, reason: `Does not specifically align with brand affinities (${flatAffinities.slice(0, 3).join(', ')}).` };
-        return { score: 0, reason: "Broad audience (No specific affinities requested)." };
+function inferHHI(demographics) {
+    let best = null;
+    for (const tag of demographics || []) {
+        const v = extractHHI(tag);
+        if (v !== null) best = best === null ? v : Math.max(best, v);
     }
-
-    if (!userInterests || userInterests.length === 0) {
-        return { score: 0, reason: "Viewer has no listed interests to evaluate against." };
-    }
-
-    const prompt = `You are an AdTech audience matching engine.
-Your ONLY job is to check for semantic or thematic overlap between Array A (User Interests) and Array B (Ad Target Affinities). 
-You must NOT invent information, make assumptions, or reference any video/creative content.
-
-Array A - User Interests: [${userInterests.join(', ')}]
-Array B - Ad Target Affinities: \n${formattedAdAffinities}
-
-RULES:
-1. Look for conceptual or thematic overlap, not just exact keyword matches (e.g., "Health & Wellness" strongly aligns with "Health-Conscious Consumers", "Gaming" aligns with "Esports").
-2. If there is NO direct or thematic overlap, the score MUST be 0. (Example: "Fast Food" does NOT match "Health-Conscious").
-3. "score" must be an integer: 0 (No match), 10 (Partial match), or 20 (Strong thematic match).
-4. "reason" MUST strictly follow this exact template if the score is > 0: "The user's interest in [Insert word from Array A] aligns with the campaign's target of [Insert word from Array B]."
-5. If the score is 0, the "reason" MUST be: "The user's interests do not align with the campaign's target affinities."
-
-Respond ONLY with a valid JSON object in this format: {"score": 0, "reason": "..."}`;
-
-    try {
-        const response = await fetch("https://api.openai.com/v1/chat/completions", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`
-            },
-            body: JSON.stringify({
-                model: "gpt-4o-mini", // Lightweight model for speed
-                messages: [{ role: "user", content: prompt }],
-                response_format: { type: "json_object" },
-                temperature: 0.1
-            })
-        });
-
-        if (!response.ok) {
-            console.error("[Audience LLM] API Error:", await response.text());
-            return { score: 0, reason: "Semantic evaluator API error. Defaulting to zero." };
-        }
-
-        const data = await response.json();
-        const parsed = JSON.parse(data.choices[0].message.content);
-
-        return {
-            score: typeof parsed.score === 'number' ? parsed.score : 0,
-            reason: parsed.reason || "Evaluated by AI"
-        };
-    } catch (e) {
-        console.error("[Audience LLM] Fetch Error:", e);
-        return { score: 0, reason: "Failed to run semantic evaluation." };
-    }
+    return best;
 }
 
-// --- 4. Hybrid Match Logic ---
-async function calculateHybridAdMatch(userCohort, adData, videoSegments, adContextEmbedding) {
-    let finalScore = 0;
-    let reasoningLog = [];
-    let bestSegment = null;
+function computeHeuristicAffinityBoost({ userDemographics, userInterests, adCohortAffinities, adCategoryKey }) {
+    const boostReasons = [];
+    let boost = 0;
 
-    // AI AUDIENCE MATCH (Replaces deterministic string match)
-    const userInterests = userCohort.interest_signals || [];
+    const ageInfo = inferAgeBand(userDemographics);
+    const age = ageInfo?.band === "exact" ? ageInfo.value : null;
+    const decade = ageInfo?.band === "decade" ? ageInfo.value : null;
+    const hhi = inferHHI(userDemographics);
 
-    // Format target audience for the LLM to understand priorities
-    let formattedAdAffinities = "No specific affinities requested.";
-    if (adData.targetAudience && typeof adData.targetAudience === 'object') {
-        const ta = adData.targetAudience;
-        const parts = [];
-        if (ta.highPriority?.length > 0) parts.push(`HIGH Priority:\n- ${ta.highPriority.join('\n- ')}`);
-        if (ta.mediumPriority?.length > 0) parts.push(`MEDIUM Priority:\n- ${ta.mediumPriority.join('\n- ')}`);
-        if (ta.lowPriority?.length > 0) parts.push(`LOW Priority:\n- ${ta.lowPriority.join('\n- ')}`);
-        if (parts.length > 0) formattedAdAffinities = parts.join('\n\n');
-    } else if (typeof adData.targetAudience === 'string') {
-        const tags = adData.targetAudience.split(',').map(s => s.trim()).filter(Boolean);
-        if (tags.length > 0) formattedAdAffinities = `Target:\n- ${tags.join('\n- ')}`;
-    }
+    const interestsText = (userInterests || []).join(" ").toLowerCase();
+    const adTags = new Set((adCohortAffinities || []).map((t) => String(t).toLowerCase().trim()));
 
-    const llmAudienceEvaluation = await evaluateAudienceWithLLM(userInterests, formattedAdAffinities);
+    const hasHealthSignal =
+        interestsText.includes("health") ||
+        interestsText.includes("wellness") ||
+        interestsText.includes("fitness") ||
+        interestsText.includes("active");
+    const hasAutoSignal = interestsText.includes("auto") || interestsText.includes("car") || interestsText.includes("vehicle");
+    const hasGamingSignal = interestsText.includes("gaming") || interestsText.includes("esports");
 
-    finalScore += llmAudienceEvaluation.score;
-    const audienceMatched = llmAudienceEvaluation.score > 0; // Tracking for the AdTech logic squelch
-
-    reasoningLog.push(`Audience Match (+${llmAudienceEvaluation.score} pts): ${llmAudienceEvaluation.reason}`);
-
-    // Helper function for Household Income (HHI) extraction
-    function getHHI(tag) {
-        const match = tag.match(/HHI\s*\$(\d+)K\+/i);
-        return match ? parseInt(match[1], 10) : null;
-    }
-
-    // Helper function for Age groups
-    function isAgeMatch(adTag, userTag) {
-        const adT = adTag.toLowerCase().trim();
-        const uT = userTag.toLowerCase().trim();
-
-        // Check if user tag is a raw number (e.g., "19")
-        const uAgeMatch = uT.match(/^(\d+)$/);
-        const userAge = uAgeMatch ? parseInt(uAgeMatch[1], 10) : null;
-
-        const adultTags = ['adults', 'adult', '18+', '20s', '30s', '40s', '50s', '60s', '70s', '80s', 'senior'];
-        const underageTags = ['teenagers', 'teens', 'teenager', 'teen', 'underage', 'youth', 'under 21'];
-
-        if (adT === 'adults' || adT === 'adult') {
-            if (adultTags.includes(uT)) return true;
-            if (userAge !== null && userAge >= 18) return true;
+    // Healthy snacks: health-focused viewers get a strong (but capped) deterministic boost
+    if (adTags.has("health_wellness") || adTags.has("clean_label") || adTags.has("high_protein")) {
+        if (hasHealthSignal) {
+            boost += 0.14;
+            boostReasons.push("health-focused viewer + clean-label/healthy snack signals");
         }
-
-        if (underageTags.includes(adT)) {
-            if (underageTags.includes(uT)) return true;
-            if (userAge !== null && userAge < 21) return true;
-        }
-
-        return false;
     }
 
-    // 1.5 DEMOGRAPHIC CHECK
-    if (adData.targetDemographics && adData.targetDemographics.length > 0) {
-        const demoMatches = adData.targetDemographics.filter(tag => {
-            const adHHI = getHHI(tag);
-            const t = tag.toLowerCase().trim();
+    // Youth tilt: snacks, gaming, sports cars
+    const isYounger = (age !== null && age < 25) || decade === 20 || decade === 10;
+    if (isYounger) {
+        if (adCategoryKey === "cpg_snacks" || adTags.has("snacking") || adTags.has("gaming")) {
+            boost += 0.08;
+            boostReasons.push("younger viewer tilt toward snacks/gaming");
+        }
+        if (adTags.has("sports_car") || adTags.has("performance_auto")) {
+            boost += 0.08;
+            boostReasons.push("younger viewer tilt toward performance auto");
+        }
+    }
 
-            return userCohort.demographics?.some(uTag => {
-                const userHHI = getHHI(uTag);
-                const ut = uTag.toLowerCase().trim();
+    // Auto enthusiasts get a boost when ad is auto/performance oriented
+    if (hasAutoSignal && (adCategoryKey.startsWith("automotive") || adTags.has("car_enthusiast"))) {
+        boost += 0.08;
+        boostReasons.push("auto interest alignment");
+    }
 
-                // Special case: Both tags are HHI brackets
-                if (adHHI !== null && userHHI !== null) {
-                    return userHHI >= adHHI;
-                }
+    // Gaming interest alignment
+    if (hasGamingSignal && adTags.has("gaming")) {
+        boost += 0.08;
+        boostReasons.push("gaming interest alignment");
+    }
 
-                // Special case: Age groups (e.g., Adults matches 30s)
-                if (isAgeMatch(t, ut)) {
-                    return true;
-                }
+    // Affluent/older tilt: finance/luxury/premium spirits
+    const isOlderOrPlanning = (age !== null && age >= 30) || decade === 30 || decade === 40 || decade === 50;
+    const isAffluent = hhi !== null && hhi >= 100;
+    if (isOlderOrPlanning && isAffluent) {
+        if (adCategoryKey === "financial_services" || adTags.has("investing") || adTags.has("retirement") || adTags.has("planning")) {
+            boost += 0.10;
+            boostReasons.push("older/affluent planning alignment");
+        }
+        if (adCategoryKey === "alcohol_premium" || adTags.has("premium_spirits") || adTags.has("luxury_goods") || adTags.has("premium_lifestyle")) {
+            boost += 0.06;
+            boostReasons.push("older/affluent premium alignment");
+        }
+    }
 
-                // Substring matches are too dangerous for short gender/demo words (e.g., "feMALE" contains "male")
-                // Enforce exact word boundary or exact match for safe demographics 
-                if (t === 'male' || t === 'female' || ut === 'male' || ut === 'female') {
-                    return t === ut;
-                }
+    // Safety cap: keep deterministic boost small relative to direct affinity
+    boost = Math.min(0.2, boost);
 
-                return ut.includes(t) || t.includes(ut);
-            });
+    return { boost, boostReasons };
+}
+
+function computeInterestOverlap(userInterests, adAffinities) {
+    if (!Array.isArray(adAffinities) || adAffinities.length === 0) return 0;
+    if (!Array.isArray(userInterests) || userInterests.length === 0) return 0;
+
+    const matches = adAffinities.filter((aff) => {
+        const affNorm = String(aff).toLowerCase().replace(/_/g, " ").trim();
+        return userInterests.some((interest) => {
+            const intNorm = String(interest).toLowerCase().trim();
+            return intNorm.includes(affNorm) || affNorm.includes(intNorm);
         });
+    });
 
-        if (demoMatches.length > 0) {
-            const propScore = Math.round((demoMatches.length / adData.targetDemographics.length) * 15);
-            finalScore += propScore;
-            reasoningLog.push(`Demographics Match (+${propScore} pts): Viewer matches preferred demographics (${demoMatches.join(', ')})`);
-        } else {
-            reasoningLog.push("Demographics Match (0 pts): No overlap with preferred demographics.");
-        }
-    }
+    return matches.length / adAffinities.length;
+}
 
-    if (adData.negativeDemographics && adData.negativeDemographics.length > 0) {
-        const negDemoMatches = adData.negativeDemographics.filter(tag => {
-            const t = tag.toLowerCase().trim();
-            return userCohort.demographics?.some(uTag => {
-                const ut = uTag.toLowerCase().trim();
+function findMatchingInterests(userInterests, adAffinities) {
+    if (!Array.isArray(adAffinities) || adAffinities.length === 0) return [];
+    if (!Array.isArray(userInterests) || userInterests.length === 0) return [];
 
-                if (t === 'male' || t === 'female' || ut === 'male' || ut === 'female') {
-                    return t === ut;
-                }
-
-                // Special case: Negative Age groups (e.g., Underage matches 19)
-                if (isAgeMatch(t, ut)) {
-                    return true;
-                }
-
-                // Special case: Negative Age groups (e.g., Underage matches 19)
-                if (isAgeMatch(t, ut)) {
-                    return true;
-                }
-
-                return ut.includes(t) || t.includes(ut);
-            });
+    return userInterests.filter((interest) => {
+        const intNorm = String(interest).toLowerCase().trim();
+        return adAffinities.some((aff) => {
+            const affNorm = String(aff).toLowerCase().replace(/_/g, " ").trim();
+            return intNorm.includes(affNorm) || affNorm.includes(intNorm);
         });
+    });
+}
 
-        if (negDemoMatches.length > 0) {
-            reasoningLog.push(`Failed: User explicitly excluded by campaign demographics (${negDemoMatches.join(', ')}).`);
-            return { isEligible: false, score: 0, reasoning: reasoningLog, bestSegment: null };
+function extractHHI(tag) {
+    const match = String(tag).match(/hhi\s*\$(\d+)k\+/i);
+    return match ? parseInt(match[1], 10) : null;
+}
+
+function isAgeMatch(adTag, userTag) {
+    const ad = String(adTag).toLowerCase().trim();
+    const user = String(userTag).toLowerCase().trim();
+
+    const userAge = user.match(/^(\d+)$/);
+    const age = userAge ? parseInt(userAge[1], 10) : null;
+
+    const ADULT_TERMS = ["adults", "adult", "18+", "21+"];
+    const UNDERAGE_TERMS = ["underage", "under 21", "teens", "teenagers", "youth"];
+    const DECADE_PATTERN = /^(\d)0s$/;
+
+    if (ADULT_TERMS.includes(ad)) {
+        if (ADULT_TERMS.includes(user)) return true;
+        if (age !== null && age >= 18) return true;
+        if (DECADE_PATTERN.test(user)) return true;
+    }
+
+    if (UNDERAGE_TERMS.includes(ad)) {
+        if (UNDERAGE_TERMS.includes(user)) return true;
+        if (age !== null && age < 21) return true;
+    }
+
+    const adDecade = ad.match(DECADE_PATTERN);
+    const userDecade = user.match(DECADE_PATTERN);
+    if (adDecade && userDecade && adDecade[1] === userDecade[1]) return true;
+    if (adDecade && age !== null) {
+        const decadeStart = parseInt(adDecade[1], 10) * 10;
+        if (age >= decadeStart && age < decadeStart + 10) return true;
+    }
+
+    return false;
+}
+
+function matchDemographics(adDemos, userDemos) {
+    const matches = [];
+
+    for (const adTag of adDemos || []) {
+        const ad = String(adTag).toLowerCase().trim();
+        const adHHI = extractHHI(ad);
+
+        for (const userTag of userDemos || []) {
+            const user = String(userTag).toLowerCase().trim();
+            const userHHI = extractHHI(user);
+
+            if (adHHI !== null && userHHI !== null) {
+                if (userHHI >= adHHI) {
+                    matches.push(adTag);
+                    break;
+                }
+                continue;
+            }
+
+            if (["male", "female"].includes(ad) || ["male", "female"].includes(user)) {
+                if (ad === user) {
+                    matches.push(adTag);
+                    break;
+                }
+                continue;
+            }
+
+            if (isAgeMatch(ad, user)) {
+                matches.push(adTag);
+                break;
+            }
+
+            if (user.includes(ad) || ad.includes(user)) {
+                matches.push(adTag);
+                break;
+            }
         }
     }
 
-    // 2. SEMANTIC CONTEXT MATCH (The TwelveLabs Magic)
-    if (!adContextEmbedding) {
-        reasoningLog.push("Contextual Placement (0 pts): Missing Ad target contexts to match against video.");
-    } else if (!videoSegments || videoSegments.length === 0) {
-        reasoningLog.push("Contextual Placement (0 pts): Video has no visual data to analyze.");
+    return { matches };
+}
+
+function scoreAdUserEligibility(user, ad) {
+    const reasoning = [];
+    const scores = {
+        categoryAffinity: 0,
+        demographicFit: 0,
+        viewingContextFit: 0,
+        engagementMultiplier: 1.0,
+    };
+
+    const userExclusions = Array.isArray(user?.exclusion_categories) ? user.exclusion_categories : [];
+    const userDemographics = Array.isArray(user?.demographics) ? user.demographics : [];
+    const userInterests = Array.isArray(user?.interest_signals) ? user.interest_signals : [];
+    const userAffinities = user?.ad_category_affinities && typeof user.ad_category_affinities === "object" ? user.ad_category_affinities : {};
+
+    const adCategoryKey = ad?.category_key ? String(ad.category_key) : "";
+    const adTargetDemos = Array.isArray(ad?.targetDemographics) ? ad.targetDemographics : [];
+    const adNegativeDemos = Array.isArray(ad?.negativeDemographics) ? ad.negativeDemographics : [];
+    const adCohortAffinities = Array.isArray(ad?.cohort_affinities) ? ad.cohort_affinities : [];
+
+    // GATE 0: Hard Exclusions
+    if (adCategoryKey && userExclusions.includes(adCategoryKey)) {
+        reasoning.push(
+            `EXCLUDED: "${adCategoryKey}" is blocked for ${user?.name || "viewer"} ` +
+            `(compliance: ${userExclusions.join(", ")})`
+        );
+        return { isEligible: false, score: 0, reasoning, scores, bestSegment: null };
+    }
+
+    if (adNegativeDemos.length > 0) {
+        const negMatch = matchDemographics(adNegativeDemos, userDemographics);
+        if (negMatch.matches.length > 0) {
+            reasoning.push(
+                `EXCLUDED: Viewer matches negative demographics (${negMatch.matches.join(", ")})`
+            );
+            return { isEligible: false, score: 0, reasoning, scores, bestSegment: null };
+        }
+    }
+
+    // SCORE 1: Category Affinity (0–40 pts)
+    if (user?.id === "generic") {
+        scores.categoryAffinity = 0.5;
+        reasoning.push(
+            `Audience Affinity (20 pts): Generic viewer — neutral baseline.`
+        );
     } else {
-        let maxScore = -1;
-        let maxSeg = null;
+        const directAffinity = adCategoryKey ? (userAffinities[adCategoryKey] ?? 0) : 0;
+        const interestOverlap = computeInterestOverlap(userInterests, adCohortAffinities);
+        const baseAffinity = directAffinity * 0.7 + interestOverlap * 0.3;
 
-        for (const seg of videoSegments) {
-            if (!seg.vector) continue;
-            // Compare the AD against the SCENE
-            const score = cosineSimilarity(adContextEmbedding, seg.vector);
-            if (score > maxScore) {
-                maxScore = score;
-                maxSeg = seg;
-            }
-        }
+        const { boost, boostReasons } = computeHeuristicAffinityBoost({
+            userDemographics,
+            userInterests,
+            adCohortAffinities,
+            adCategoryKey,
+        });
 
-        // 1. LOG THE RAW SCORE (Crucial for debugging!)
-        console.log(`[DEBUG] Raw Cosine Score against video: ${maxScore.toFixed(3)}`);
+        scores.categoryAffinity = clamp01(baseAffinity + boost);
 
-        // 2. RAISE THE FLOOR AND CEILING TO CUT OUT "NOISE"
-        // Demo-Optimized Curve: 
-        // 0.20 is our noise floor, 0.28 represents a "Perfect" cross-modal match.
-        const minExpected = 0.20;
-        const maxExpected = 0.28;
+        const affinityPts = Math.round(scores.categoryAffinity * 40);
+        const matchedInterests = findMatchingInterests(userInterests, adCohortAffinities);
 
-        if (maxScore > minExpected) {
-            let normalizedPoints = ((maxScore - minExpected) / (maxExpected - minExpected)) * 65;
-            normalizedPoints = Math.max(0, Math.min(65, Math.round(normalizedPoints))); // Cap at 65
-
-            // 3. THE ADTECH LOGIC GATE (The Fix)
-            // Check if the user completely failed the deterministic audience checks
-            // We shouldn't reward them with high contextual points if they aren't the primary audience
-            if (!audienceMatched) {
-                // Squelch the semantic score by 80% if they aren't the target audience
-                normalizedPoints = Math.round(normalizedPoints * 0.2);
-                // Updated UI Text
-                reasoningLog.push(`Contextual Placement (+${normalizedPoints} pts): Scene perfectly matches Ad campaign contexts, but score penalized due to zero audience alignment.`);
-            } else {
-                // Updated UI Text
-                reasoningLog.push(`Contextual Placement (+${normalizedPoints} pts): The video's current scene perfectly matches the brand's required campaign environments.`);
-            }
-
-            finalScore += normalizedPoints;
-
-            if (maxSeg) {
-                bestSegment = {
-                    start: maxSeg.startOffsetSec,
-                    end: maxSeg.endOffsetSec,
-                    score: maxScore
-                };
-            }
+        if (directAffinity >= 0.7) {
+            reasoning.push(
+                `Audience Affinity (+${affinityPts} pts): Strong affinity for ${adCategoryKey} ` +
+                `(${(directAffinity * 100).toFixed(0)}%). ` +
+                `Matching interests: ${matchedInterests.join(", ") || "category-level match"}.`
+            );
+        } else if (directAffinity >= 0.4) {
+            reasoning.push(
+                `Audience Affinity (+${affinityPts} pts): Moderate affinity for ${adCategoryKey} ` +
+                `(${(directAffinity * 100).toFixed(0)}%).`
+            );
+        } else if (directAffinity > 0) {
+            reasoning.push(
+                `Audience Affinity (+${affinityPts} pts): Weak affinity for ${adCategoryKey} ` +
+                `(${(directAffinity * 100).toFixed(0)}%).`
+            );
         } else {
-            reasoningLog.push(`Contextual Placement (0 pts): Visual context does not strongly resonate with the Ad's target environments.`);
-            // Don't auto-fail them if they had high audience scores, just give 0 semantic points.
+            reasoning.push(
+                `Audience Affinity (+0 pts): No recorded affinity for ${adCategoryKey || "this category"}.`
+            );
+        }
+
+        if (boost > 0) {
+            const boostPts = Math.round(boost * 40);
+            reasoning.push(
+                `Heuristic Boost (+${boostPts} pts): ${boostReasons.join("; ")}.`
+            );
         }
     }
 
-    // 3. BRAND SAFETY CHECK (Handled on UI usually, but confirm passing status here)
-    if (adData.brandSafetyGARM && adData.brandSafetyGARM.length > 0) {
-        reasoningLog.push(`Warning: Subjective GARM tags detected (${adData.brandSafetyGARM.join(', ')}).`);
+    // SCORE 2: Demographic Fit (0–30 pts)
+    if (adTargetDemos.length > 0 && userDemographics.length > 0) {
+        const demoResult = matchDemographics(adTargetDemos, userDemographics);
+        const demoRatio = demoResult.matches.length / adTargetDemos.length;
+        scores.demographicFit = demoRatio;
+
+        const demoPts = Math.round(demoRatio * 30);
+        if (demoPts > 0) {
+            reasoning.push(
+                `Demographics (+${demoPts} pts): Viewer matches ${demoResult.matches.length}` +
+                `/${adTargetDemos.length} preferred demographics (${demoResult.matches.join(", ")}).`
+            );
+        } else {
+            reasoning.push(
+                `Demographics (0 pts): No overlap with preferred demographics (${adTargetDemos.join(", ")}).`
+            );
+        }
+    } else {
+        scores.demographicFit = 0.5;
+        reasoning.push(`Demographics (15 pts): No demographic targeting specified — neutral.`);
     }
+
+    // SCORE 3: Viewing Context Fit (0–15 pts)
+    const viewingContext = user?.viewing_context || {};
+    const daypart = viewingContext?.typical_daypart || "primetime";
+    const device = viewingContext?.device_type || "ctv";
+
+    const DAYPART_DEVICE_MATRIX = {
+        primetime: { ctv: 1.0, mobile: 0.6, tablet: 0.7, desktop: 0.5 },
+        late_night: { ctv: 0.9, mobile: 0.7, tablet: 0.7, desktop: 0.4 },
+        daytime: { ctv: 0.5, mobile: 0.8, tablet: 0.8, desktop: 0.9 },
+        morning: { ctv: 0.4, mobile: 0.8, tablet: 0.7, desktop: 0.9 },
+    };
+
+    const PREMIUM_CATEGORIES = [
+        "alcohol_premium",
+        "automotive_luxury",
+        "fashion_luxury",
+        "travel_luxury",
+        "financial_services",
+    ];
+    const isPremiumAd = PREMIUM_CATEGORIES.includes(adCategoryKey);
+
+    const baseContextScore = (DAYPART_DEVICE_MATRIX[daypart] && DAYPART_DEVICE_MATRIX[daypart][device]) ?? 0.5;
+
+    scores.viewingContextFit = isPremiumAd
+        ? baseContextScore
+        : 0.4 + baseContextScore * 0.3;
+
+    const contextPts = Math.round(scores.viewingContextFit * 15);
+    reasoning.push(
+        `Viewing Context (+${contextPts} pts): ${daypart} viewing on ${String(device).toUpperCase()}` +
+        `${isPremiumAd ? " (premium placement boost)" : ""}.`
+    );
+
+    // SCORE 4: Engagement Tier (multiplier)
+    const ENGAGEMENT_MULTIPLIERS = { high: 1.15, medium: 1.0, low: 0.85 };
+    const engagementTier = user?.engagement_tier || "medium";
+    scores.engagementMultiplier = ENGAGEMENT_MULTIPLIERS[engagementTier] ?? 1.0;
+
+    if (engagementTier === "high") {
+        reasoning.push(`Engagement Boost (×1.15): High-engagement viewer — premium ad tier eligible.`);
+    } else if (engagementTier === "low") {
+        reasoning.push(`Engagement Penalty (×0.85): Low-engagement viewer — reduced ad value.`);
+    }
+
+    // COMPOSITE SCORE
+    const rawScore =
+        scores.categoryAffinity * 40 +
+        scores.demographicFit * 30 +
+        scores.viewingContextFit * 15 +
+        15;
+
+    const finalScore = Math.round(Math.min(100, rawScore * scores.engagementMultiplier));
 
     return {
-        isEligible: finalScore > 0,
+        isEligible: finalScore > 15,
         score: finalScore,
-        reasoning: reasoningLog,
-        bestSegment
+        reasoning,
+        scores,
+        bestSegment: null,
     };
+}
+
+function normalizeAdPayload(raw) {
+    const ad = raw && typeof raw === "object" ? raw : {};
+
+    // Backward-compatible aliases
+    if (ad.categoryKey && !ad.category_key) ad.category_key = ad.categoryKey;
+    if (ad.cohortAffinities && !ad.cohort_affinities) ad.cohort_affinities = ad.cohortAffinities;
+
+    // Ensure arrays where needed
+    if (!Array.isArray(ad.targetDemographics) && ad.targetDemographics != null) {
+        ad.targetDemographics = String(ad.targetDemographics).split(",").map(s => s.trim()).filter(Boolean);
+    }
+    if (!Array.isArray(ad.negativeDemographics) && ad.negativeDemographics != null) {
+        ad.negativeDemographics = String(ad.negativeDemographics).split(",").map(s => s.trim()).filter(Boolean);
+    }
+    if (!Array.isArray(ad.cohort_affinities) && ad.cohort_affinities != null) {
+        ad.cohort_affinities = String(ad.cohort_affinities).split(",").map(s => s.trim()).filter(Boolean);
+    }
+
+    return ad;
 }
 
 export async function POST(req) {
     try {
         const body = await req.json();
-        const { userCohort, adData, videoSegments } = body;
+        const { userCohort } = body || {};
+        const adRaw = body?.ad ?? body?.adData;
 
-        if (!userCohort || !adData || !videoSegments) {
-            return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+        if (!userCohort || !adRaw) {
+            return NextResponse.json({ error: "Missing required fields: userCohort, ad" }, { status: 400 });
         }
 
-        let result;
-
-        // 1. Gather the Ad's Target Contexts (Fallback to a generic string if empty)
-        let contextArray = [];
-        if (Array.isArray(adData.targetContexts)) {
-            contextArray = adData.targetContexts;
-        } else if (adData.targetContexts && typeof adData.targetContexts === 'object') {
-            // In case it's an object with categories
-            contextArray = Object.values(adData.targetContexts).flat();
-        } else if (typeof adData.targetContexts === 'string') {
-            contextArray = adData.targetContexts.split(',').map(s => s.trim()).filter(Boolean);
-        }
-
-        const adQuery = contextArray.length > 0
-            ? contextArray.join(', ')
-            : "Commercial, advertising, brand promotion";
-
-        // 2. Fetch vector from TwelveLabs using the AD'S CONTEXTS, not the User's
-        console.log(`[Semantic Match] Generating vector for Ad Contexts: ${adQuery}`);
-        const adContextEmbedding = await generateTextEmbedding(adQuery);
-
-        if (!adContextEmbedding) {
-            return NextResponse.json({ error: "Failed to generate text embedding" }, { status: 500 });
-        }
-
-        // Pass the adContextEmbedding instead of userEmbedding
-        result = await calculateHybridAdMatch(userCohort, adData, videoSegments, adContextEmbedding);
+        const ad = normalizeAdPayload(adRaw);
+        const result = scoreAdUserEligibility(userCohort, ad);
 
         return NextResponse.json(result, { status: 200 });
 

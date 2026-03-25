@@ -41,39 +41,137 @@ interface MockUser {
     name: string;
     demographics: string[];
     interest_signals: string[];
-}
-
-const mockUsers: MockUser[] = [
+    ad_category_affinities: Record<string, number>;
+    content_preferences: string[];
+    exclusion_categories: string[];
+    viewing_context: {
+      device_type: "ctv" | "mobile" | "tablet" | "desktop";
+      typical_daypart: "morning" | "daytime" | "primetime" | "late_night";
+    };
+    engagement_tier: "high" | "medium" | "low";
+    dma_region: string;
+  }
+  
+  const mockUsers: MockUser[] = [
     {
-        id: "ethan",
-        name: "Ethan",
-        demographics: ["Male", "30s", "Urban", "HHI $100K+"],
-        interest_signals: ["Luxury goods", "High-end", "Premium spirits", "Liquor", "Alcohol", "Travel", "Vacation", "Resorts", "Fine Dining"]
+      id: "ethan",
+      name: "Ethan",
+      demographics: ["Male", "30s", "Urban", "HHI $100K+"],
+      interest_signals: [
+        "Luxury goods", "High-end", "Premium spirits", "Liquor",
+        "Alcohol", "Travel", "Vacation", "Resorts", "Fine Dining"
+      ],
+      ad_category_affinities: {
+        alcohol_premium: 0.95,
+        travel_luxury: 0.90,
+        fashion_luxury: 0.80,
+        automotive_luxury: 0.75,
+        financial_services: 0.70,
+        technology: 0.60,
+        alcohol_beer: 0.40,
+        cpg_food: 0.30,
+        fitness_wellness: 0.25,
+      },
+      content_preferences: ["Drama", "Thriller", "Documentary", "Late Night"],
+      exclusion_categories: [],
+      viewing_context: {
+        device_type: "ctv",
+        typical_daypart: "primetime",
+      },
+      engagement_tier: "high",
+      dma_region: "New York",
     },
     {
-        id: "sarah",
-        name: "Sarah",
-        demographics: ["Female", "40s", "Suburban", "HHI $150K+"],
-        interest_signals: ["Automotive", "Cars", "Vehicles", "Home improvement", "DIY", "Renovation", "Fitness", "Sports Enthusiasts", "Health & Wellness", "Active Lifestyle"]
+      id: "sarah",
+      name: "Sarah",
+      demographics: ["Female", "40s", "Suburban", "HHI $150K+"],
+      interest_signals: [
+        "Automotive", "Cars", "Vehicles", "Home improvement", "DIY",
+        "Renovation", "Fitness", "Sports Enthusiasts",
+        "Health & Wellness", "Active Lifestyle"
+      ],
+      ad_category_affinities: {
+        automotive_truck: 0.55,
+        automotive_luxury: 0.80,
+        home_improvement: 0.95,
+        fitness_wellness: 0.90,
+        insurance: 0.65,
+        financial_services: 0.70,
+        retail_general: 0.60,
+        cpg_food: 0.50,
+        pharmaceutical: 0.45,
+        travel_adventure: 0.55,
+      },
+      content_preferences: ["Reality TV", "Home & Garden", "Competition", "Sports"],
+      exclusion_categories: [],
+      viewing_context: {
+        device_type: "ctv",
+        typical_daypart: "primetime",
+      },
+      engagement_tier: "high",
+      dma_region: "Chicago",
     },
     {
-        id: "nathan",
-        name: "Nathan",
-        demographics: ["Male", "19", "College Student", "Low-Income", "HHI $0K+"],
-        interest_signals: ["Gaming", "Video Games", "Esports", "Fast Food", "QSR", "Music", "Concerts", "Entertainment", "Movies", "Pop Culture", "Gen-Z"]
+      id: "nathan",
+      name: "Nathan",
+      demographics: ["Male", "19", "College Student", "Low-Income", "HHI $0K+"],
+      interest_signals: [
+        "Gaming", "Video Games", "Esports", "Fast Food", "QSR",
+        "Music", "Concerts", "Entertainment", "Movies",
+        "Pop Culture", "Gen-Z"
+      ],
+      ad_category_affinities: {
+        cpg_snacks: 0.95,
+        qsr_fast_food: 0.95,
+        technology: 0.85,
+        telecom: 0.70,
+        retail_general: 0.65,
+        entertainment: 0.80,
+        fitness_wellness: 0.30,
+        automotive_truck: 0.15,
+        financial_services: 0.10,
+      },
+      content_preferences: ["Action", "Comedy", "Anime", "Sports", "Gaming"],
+      exclusion_categories: [
+        "alcohol_premium",
+        "alcohol_beer",
+        "sports_betting",
+        "pharmaceutical",
+      ],
+      viewing_context: {
+        device_type: "mobile",
+        typical_daypart: "late_night",
+      },
+      engagement_tier: "medium",
+      dma_region: "Los Angeles",
     },
     {
-        id: "generic",
-        name: "Generic",
-        demographics: [],
-        interest_signals: []
-    }
-];
+      id: "generic",
+      name: "Generic",
+      demographics: [],
+      interest_signals: [],
+      ad_category_affinities: {},
+      content_preferences: [],
+      exclusion_categories: [],
+      viewing_context: {
+        device_type: "ctv",
+        typical_daypart: "primetime",
+      },
+      engagement_tier: "medium",
+      dma_region: "National",
+    },
+  ];
 
 interface AffinityResult {
     isEligible: boolean;
     score: number;
     reasoning: string[];
+    scores?: {
+        categoryAffinity: number;
+        demographicFit: number;
+        viewingContextFit: number;
+        engagementMultiplier: number;
+    };
     bestSegment: { start: number; end: number; score: number } | null;
 }
 
@@ -93,6 +191,88 @@ function parseUserMeta(raw: string | null | undefined): Record<string, string> {
     if (!raw) return {};
     try { const p = JSON.parse(raw); return typeof p === "object" && p !== null ? p : {}; }
     catch { return {}; }
+}
+
+function toSnakeCaseTag(input: string): string {
+    return input
+        .toLowerCase()
+        .replace(/&/g, " and ")
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "")
+        .replace(/_+/g, "_");
+}
+
+function deriveCategoryCohortTags(categoryKey: string): string[] {
+    const CATEGORY_TAGS: Record<string, string[]> = {
+        alcohol_premium: [
+            "premium_spirits",
+            "luxury_goods",
+            "fine_dining",
+            "celebration",
+            "upscale_social",
+            "travel_luxury",
+        ],
+        automotive_truck: [
+            "outdoor_adventure",
+            "diy",
+            "home_improvement",
+            "utility_vehicle",
+            "construction",
+            "sports_enthusiasts",
+        ],
+        automotive_luxury: [
+            "sports_car",
+            "performance_auto",
+            "luxury_goods",
+            "premium_lifestyle",
+            "car_enthusiast",
+        ],
+        cpg_snacks: [
+            "snacking",
+            "value_shopper",
+            "family_friendly",
+            "sports_viewing",
+            "gaming",
+        ],
+        financial_services: [
+            "planning",
+            "investing",
+            "retirement",
+            "future_focused",
+            "high_hhi",
+        ],
+    };
+
+    return CATEGORY_TAGS[categoryKey] ?? [];
+}
+
+function deriveVideoCohortTags(summary: string, contexts: string[]): string[] {
+    const corpus = `${summary || ""}\n${(contexts || []).join("\n")}`.toLowerCase();
+
+    const KEYWORD_TO_TAGS: Array<{ re: RegExp; tags: string[] }> = [
+        // Healthy snack / clean label
+        { re: /\b(healthy|healthier|health\s*&\s*wellness|health and wellness|wellness|clean label|no artificial|no preservatives|preservatives|allergen|gluten[-\s]?free|dairy[-\s]?free|paleo|keto|whole30|high[-\s]?protein|protein|grass[-\s]?fed)\b/i, tags: ["health_wellness", "fitness_wellness", "clean_label", "high_protein"] },
+        // Snacks / convenience
+        { re: /\b(snack|snacking|on[-\s]?the[-\s]?go|convenien(t|ce)|grab and go)\b/i, tags: ["snacking", "convenience"] },
+        // Sports cars / performance
+        { re: /\b(sports car|performance|horsepower|track|racing|0[-\s]?60|turbo|premium interior)\b/i, tags: ["sports_car", "performance_auto", "car_enthusiast"] },
+        // Trucks / outdoors
+        { re: /\b(truck|pickup|towing|payload|off[-\s]?road|construction|jobsite|worksite|outdoor|adventure)\b/i, tags: ["utility_vehicle", "outdoor_adventure"] },
+        // Spirits / luxury moments
+        { re: /\b(whiskey|bourbon|scotch|vodka|cocktail|bar|toasting|celebration|luxury|premium)\b/i, tags: ["premium_spirits", "celebration", "upscale_social", "premium_lifestyle"] },
+        // Finance planning
+        { re: /\b(investing|investment|retirement|portfolio|savings|save\b|planning|financial)\b/i, tags: ["planning", "investing", "retirement"] },
+        // Subscription/value
+        { re: /\b(subscribe|subscription|subscribe and save|save\s+\d+%|discount|deal)\b/i, tags: ["value_shopper"] },
+        // Youth tilt signals (from ad copy)
+        { re: /\b(gen[-\s]?z|college|campus|gaming|esports)\b/i, tags: ["gen_z", "gaming"] },
+    ];
+
+    const derived: string[] = [];
+    for (const rule of KEYWORD_TO_TAGS) {
+        if (rule.re.test(corpus)) derived.push(...rule.tags);
+    }
+    return Array.from(new Set(derived));
 }
 
 /* ── Skeleton ───────────────────────────────────────────── */
@@ -193,17 +373,62 @@ Return ONLY valid JSON, no markdown fences.`;
     // Affinity Matching
     useEffect(() => {
         const fetchAffinity = async () => {
-            if (!analysis || !video || !(video as any).embedding_segments) return;
+            if (!analysis || !video) return;
             setAffinityLoading(true);
             try {
                 const userCohort = mockUsers.find(u => u.id === selectedUserId);
+
+                const slugToCategoryKey: Record<string, string> = {
+                    "premium-spirits": "alcohol_premium",
+                    "automotive-truck": "automotive_truck",
+                    "cpg-snacks": "cpg_snacks",
+                    "financial-services": "financial_services",
+                };
+                const category_key = slugToCategoryKey[slug] ?? toSnakeCaseTag(slug);
+
+                const targetAudience = analysis.targetAudience;
+                const targetAudienceTags = Array.from(new Set(
+                    typeof targetAudience === "string"
+                        ? targetAudience.split(",").map(s => toSnakeCaseTag(s.trim())).filter(Boolean)
+                        : [
+                            ...(targetAudience?.highPriority ?? []).map(toSnakeCaseTag),
+                            ...(targetAudience?.mediumPriority ?? []).map(toSnakeCaseTag),
+                            ...(targetAudience?.lowPriority ?? []).map(toSnakeCaseTag),
+                        ]
+                ));
+
+                const categoryTags = deriveCategoryCohortTags(category_key);
+                const videoDerivedTags = deriveVideoCohortTags(
+                    analysis.summary || "",
+                    analysis.recommendedContexts || []
+                );
+
+                const cohort_affinities = Array.from(new Set([
+                    ...categoryTags,
+                    ...videoDerivedTags,
+                    ...targetAudienceTags,
+                ]));
+
+                const ad = {
+                    id: video.id,
+                    brand: analysis.company || "Unknown",
+                    category_key,
+                    asset_url: video?.hls?.videoUrl || "",
+                    targetContexts: analysis.recommendedContexts || [],
+                    targetDemographics: analysis.targetDemographics || [],
+                    negativeDemographics: analysis.negativeDemographics || [],
+                    targetAudience: analysis.targetAudience,
+                    cohort_affinities,
+                    brandSafetyGARM: analysis.brandSafetyGARM || [],
+                    priority: 0,
+                };
+
                 const res = await fetch("/api/affinityMatching", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                         userCohort,
-                        adData: analysis,
-                        videoSegments: (video as any).embedding_segments
+                        ad,
                     })
                 });
                 const data = await res.json();
@@ -215,7 +440,7 @@ Return ONLY valid JSON, no markdown fences.`;
             }
         };
         fetchAffinity();
-    }, [analysis, selectedUserId, video]);
+    }, [analysis, selectedUserId, video, slug]);
 
     // HLS setup
     useEffect(() => {
@@ -522,103 +747,241 @@ Return ONLY valid JSON, no markdown fences.`;
                                 ))}
                             </div>
                         </div>
+                    </div>
+                </div>
 
-                        {/* --- NEW AFFINITY MATCHING UI --- */}
-                        <div className="pt-4 border-t border-border-light mt-6">
-                            <div className="flex items-center justify-between mb-3">
-                                <h2 className="text-xs font-semibold uppercase tracking-[1.5px] text-mb-pink-dark">Simulate Viewer Affinity</h2>
-                                <span className="text-[10px] bg-mb-pink-light/20 text-mb-pink-dark px-2 py-0.5 rounded border border-mb-pink-light/60 font-medium">DEMO</span>
-                            </div>
+                {/* --- SIMULATE VIEWER AFFINITY (FULL-WIDTH) --- */}
+                <div className="mt-8 pt-6 border-t border-border-light">
+                    <div className="flex items-center justify-between mb-3">
+                        <h2 className="text-xs font-semibold uppercase tracking-[1.5px] text-mb-pink-dark">Simulate Viewer Affinity</h2>
+                        <span className="text-[10px] bg-mb-pink-light/20 text-mb-pink-dark px-2 py-0.5 rounded border border-mb-pink-light/60 font-medium">DEMO</span>
+                    </div>
 
-                            {/* User Selection Strip */}
-                            <div className="flex gap-2 mb-4">
-                                {mockUsers.map(user => (
-                                    <button
-                                        key={user.id}
-                                        onClick={() => setSelectedUserId(user.id)}
-                                        className={`flex-1 py-2 px-3 rounded-lg border text-xs font-medium transition-all ${selectedUserId === user.id ? 'bg-mb-pink-dark text-white border-mb-pink-dark shadow-sm' : 'bg-white text-text-secondary border-border-light hover:bg-gray-50'}`}
-                                    >
-                                        <div className="flex items-center justify-center gap-2">
-                                            <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] ${selectedUserId === user.id ? 'bg-white/20' : 'bg-gray-100'}`}>
-                                                {user.name.charAt(0)}
-                                            </div>
-                                            {user.name}
-                                        </div>
-                                    </button>
-                                ))}
-                            </div>
-
-                            {/* User Cohort Data */}
-                            <div className="bg-gray-50 rounded-lg p-3 mb-4 text-[11px] border border-border-light">
-                                {mockUsers.find(u => u.id === selectedUserId)?.demographics.length ? (
-                                    <div className="space-y-2">
-                                        <div className="flex">
-                                            <span className="w-24 text-text-tertiary font-medium">Demographics:</span>
-                                            <span className="text-text-primary">{mockUsers.find(u => u.id === selectedUserId)?.demographics.join(", ")}</span>
-                                        </div>
-                                        <div className="flex">
-                                            <span className="w-24 text-text-tertiary font-medium">Interests:</span>
-                                            <span className="text-text-primary">{mockUsers.find(u => u.id === selectedUserId)?.interest_signals.join(", ")}</span>
-                                        </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
+                        {mockUsers.map(user => (
+                            <button
+                                key={user.id}
+                                onClick={() => setSelectedUserId(user.id)}
+                                className={`py-2 px-3 rounded-lg border text-xs font-medium transition-all ${selectedUserId === user.id ? 'bg-mb-pink-dark text-white border-mb-pink-dark shadow-sm' : 'bg-white text-text-secondary border-border-light hover:bg-gray-50'}`}
+                            >
+                                <div className="flex items-center justify-center gap-2">
+                                    <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] ${selectedUserId === user.id ? 'bg-white/20' : 'bg-gray-100'}`}>
+                                        {user.name.charAt(0)}
                                     </div>
-                                ) : (
-                                    <p className="text-text-tertiary italic text-center py-1">No specific demographic targeting.</p>
-                                )}
-                            </div>
+                                    {user.name}
+                                </div>
+                            </button>
+                        ))}
+                    </div>
 
-                            {/* Affinity Results */}
-                            <div className={`rounded-xl border p-4 transition-all ${affinityLoading ? 'bg-gray-50/50 border-border-light' : affinityResult?.isEligible ? 'bg-mb-green-light/10 border-mb-green-light/40' : 'bg-red-50/50 border-red-100'}`}>
-                                {affinityLoading ? (
-                                    <div className="space-y-3">
-                                        <Skeleton className="h-6 w-32" />
-                                        <Skeleton className="h-4 w-full" />
-                                        <Skeleton className="h-4 w-5/6" />
-                                    </div>
-                                ) : affinityResult ? (
-                                    <>
-                                        <div className="flex items-center justify-between mb-3 border-b border-black/5 pb-3">
-                                            <div className="flex items-center gap-2">
-                                                {affinityResult.isEligible ? (
-                                                    <div className="w-6 h-6 rounded-full bg-mb-green-dark text-white flex items-center justify-center">
-                                                        <svg viewBox="0 0 12 12" fill="none" className="w-3.5 h-3.5"><path d="M10 3L4.5 8.5 2 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
-                                                    </div>
-                                                ) : (
-                                                    <div className="w-6 h-6 rounded-full bg-red-500 text-white flex items-center justify-center">
-                                                        <svg viewBox="0 0 12 12" fill="none" className="w-3.5 h-3.5"><path d="M3 3l6 6M9 3L3 9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
-                                                    </div>
-                                                )}
-                                                <span className={`font-bold ${affinityResult.isEligible ? 'text-mb-green-dark' : 'text-red-700'}`}>
-                                                    {affinityResult.isEligible ? 'Match Eligible' : 'Delivery Blocked'}
-                                                </span>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        <div className="bg-gray-50 rounded-xl p-4 text-[11px] border border-border-light">
+                            {(() => {
+                                const user = mockUsers.find(u => u.id === selectedUserId);
+                                if (!user) return null;
+
+                                const topAffinities = Object.entries(user.ad_category_affinities || {})
+                                    .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))
+                                    .slice(0, 6);
+
+                                const slugToCategoryKey: Record<string, string> = {
+                                    "premium-spirits": "alcohol_premium",
+                                    "automotive-truck": "automotive_truck",
+                                    "cpg-snacks": "cpg_snacks",
+                                    "financial-services": "financial_services",
+                                };
+                                const category_key = slugToCategoryKey[slug] ?? toSnakeCaseTag(slug);
+                                const isBlocked = user.exclusion_categories?.includes(category_key);
+
+                                return (
+                                    <div className="grid grid-cols-1 gap-4">
+                                        <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+                                            <div>
+                                                <div className="text-[10px] text-text-tertiary font-semibold uppercase tracking-wider">Viewing</div>
+                                                <div className="text-[11px] text-text-primary font-medium mt-0.5">
+                                                    {user.viewing_context.typical_daypart} · {user.viewing_context.device_type.toUpperCase()}
+                                                </div>
                                             </div>
-                                            <div className="text-right">
-                                                <div className="text-[10px] text-text-tertiary uppercase tracking-wider font-semibold">Match Score</div>
-                                                <div className={`text-xl font-black ${affinityResult.isEligible ? 'text-mb-green-dark' : 'text-red-700'}`}>
-                                                    {affinityResult.score}
+                                            <div>
+                                                <div className="text-[10px] text-text-tertiary font-semibold uppercase tracking-wider">Engagement</div>
+                                                <div className="text-[11px] text-text-primary font-medium mt-0.5">{user.engagement_tier}</div>
+                                            </div>
+                                            <div className="col-span-2">
+                                                <div className="text-[10px] text-text-tertiary font-semibold uppercase tracking-wider">Demographics</div>
+                                                <div className="text-[11px] text-text-primary mt-0.5">{user.demographics.length ? user.demographics.join(", ") : "—"}</div>
+                                            </div>
+                                            <div>
+                                                <div className="text-[10px] text-text-tertiary font-semibold uppercase tracking-wider">DMA</div>
+                                                <div className="text-[11px] text-text-primary mt-0.5">{user.dma_region}</div>
+                                            </div>
+                                            <div>
+                                                <div className="text-[10px] text-text-tertiary font-semibold uppercase tracking-wider">Exclusions</div>
+                                                <div className={`text-[11px] mt-0.5 ${isBlocked ? "font-semibold text-red-700" : "text-text-primary"}`}>
+                                                    {user.exclusion_categories.length ? user.exclusion_categories.join(", ") : "—"}
+                                                    {isBlocked ? " (blocks this ad)" : ""}
                                                 </div>
                                             </div>
                                         </div>
 
-                                        <div className="space-y-2">
+                                        <div>
+                                            <div className="text-[10px] text-text-tertiary font-semibold uppercase tracking-wider mb-1.5">Interest signals</div>
+                                            <div className="flex flex-wrap gap-1.5 max-h-20 overflow-auto pr-1">
+                                                {user.interest_signals.length ? user.interest_signals.map((t) => (
+                                                    <span key={t} className="px-2 py-1 rounded-full bg-white text-[11px] font-medium text-text-secondary border border-border-light">
+                                                        {t}
+                                                    </span>
+                                                )) : (
+                                                    <span className="text-[11px] text-text-tertiary">—</span>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                            <div>
+                                                <div className="text-[10px] text-text-tertiary font-semibold uppercase tracking-wider mb-1.5">Top affinities</div>
+                                                {topAffinities.length ? (
+                                                    <div className="space-y-2">
+                                                        {topAffinities.map(([k, v]) => (
+                                                            <div key={k} className="grid grid-cols-[1fr_auto] gap-3 items-center">
+                                                                <div>
+                                                                    <span className="text-[11px] font-medium text-text-primary">{k}</span>
+                                                                    <div className="mt-1 h-1.5 rounded-full bg-gray-100 overflow-hidden ring-1 ring-inset ring-black/5">
+                                                                        <div className="h-full bg-gray-800 rounded-full" style={{ width: `${Math.max(0, Math.min(1, v)) * 100}%` }} />
+                                                                    </div>
+                                                                </div>
+                                                                <div className="text-[11px] font-semibold text-text-primary tabular-nums">{Math.round(v * 100)}%</div>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                ) : (
+                                                    <div className="text-[11px] text-text-tertiary">—</div>
+                                                )}
+                                            </div>
+                                            <div>
+                                                <div className="text-[10px] text-text-tertiary font-semibold uppercase tracking-wider mb-1.5">Content preferences</div>
+                                                <div className="flex flex-wrap gap-1.5">
+                                                    {user.content_preferences.length ? user.content_preferences.map((p) => (
+                                                        <span key={p} className="px-2 py-1 rounded-full bg-white text-[11px] font-medium text-text-secondary border border-border-light">
+                                                            {p}
+                                                        </span>
+                                                    )) : (
+                                                        <span className="text-[11px] text-text-tertiary">—</span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
+                        </div>
+
+                        <div className={`rounded-xl border p-4 transition-all ${affinityLoading ? 'bg-gray-50/50 border-border-light' : affinityResult?.isEligible ? 'bg-mb-green-light/10 border-mb-green-light/40' : 'bg-red-50/50 border-red-100'}`}>
+                            {affinityLoading ? (
+                                <div className="space-y-3">
+                                    <Skeleton className="h-6 w-32" />
+                                    <Skeleton className="h-4 w-full" />
+                                    <Skeleton className="h-4 w-5/6" />
+                                </div>
+                            ) : affinityResult ? (
+                                <>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 border-b border-black/5 pb-3">
+                                        <div className="flex items-center gap-2">
+                                            {affinityResult.isEligible ? (
+                                                <div className="w-6 h-6 rounded-full bg-mb-green-dark text-white flex items-center justify-center">
+                                                    <svg viewBox="0 0 12 12" fill="none" className="w-3.5 h-3.5"><path d="M10 3L4.5 8.5 2 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                                                </div>
+                                            ) : (
+                                                <div className="w-6 h-6 rounded-full bg-red-500 text-white flex items-center justify-center">
+                                                    <svg viewBox="0 0 12 12" fill="none" className="w-3.5 h-3.5"><path d="M3 3l6 6M9 3L3 9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                                                </div>
+                                            )}
+                                            <span className={`font-bold ${affinityResult.isEligible ? 'text-mb-green-dark' : 'text-red-700'}`}>
+                                                {affinityResult.isEligible ? 'Match Eligible' : 'Delivery Blocked'}
+                                            </span>
+                                        </div>
+                                        <div className="text-left sm:text-right">
+                                            <div className="text-[10px] text-text-tertiary uppercase tracking-wider font-semibold">Match Score</div>
+                                            <div className={`text-xl font-black ${affinityResult.isEligible ? 'text-mb-green-dark' : 'text-red-700'}`}>
+                                                {affinityResult.score}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {affinityResult.scores && (
+                                        <div className="mt-3 bg-white/60 p-3 rounded-lg border border-black/5">
+                                            <div className="flex items-center justify-between mb-2">
+                                                <div className="text-[10px] text-text-tertiary uppercase tracking-wider font-semibold">Metric breakdown</div>
+                                                <div className="text-[10px] text-text-tertiary">
+                                                    <span className="font-medium">Weights</span>: Affinity 40 · Demo 30 · Context 15 · Base 15
+                                                </div>
+                                            </div>
+
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                {[
+                                                    {
+                                                        key: "Category affinity",
+                                                        value: affinityResult.scores.categoryAffinity,
+                                                        hint: "Direct category affinity plus interest overlap, with a small demo-tuned heuristic boost.",
+                                                    },
+                                                    {
+                                                        key: "Demographic fit",
+                                                        value: affinityResult.scores.demographicFit,
+                                                        hint: "Match ratio against the ad’s preferred demographics (HHI thresholds, age, gender).",
+                                                    },
+                                                    {
+                                                        key: "Viewing context",
+                                                        value: affinityResult.scores.viewingContextFit,
+                                                        hint: "Daypart + device score; premium categories get full-range impact.",
+                                                    },
+                                                    {
+                                                        key: "Engagement multiplier",
+                                                        value: affinityResult.scores.engagementMultiplier,
+                                                        hint: "High/medium/low engagement scales the final score (0.85–1.15).",
+                                                        isMultiplier: true,
+                                                    },
+                                                ].map((m) => (
+                                                    <div key={m.key} className="rounded-lg bg-white/70 border border-black/5 p-3">
+                                                        <div className="flex items-center justify-between">
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="text-[11px] font-medium text-text-primary">{m.key}</span>
+                                                                <span className="text-[10px] text-text-tertiary" title={m.hint}>(i)</span>
+                                                            </div>
+                                                            <div className="text-[11px] font-semibold text-text-primary tabular-nums">
+                                                                {(m as any).isMultiplier ? `×${m.value.toFixed(2)}` : m.value.toFixed(2)}
+                                                            </div>
+                                                        </div>
+                                                        {!(m as any).isMultiplier && (
+                                                            <div className="mt-2 h-1.5 rounded-full bg-gray-100 overflow-hidden ring-1 ring-inset ring-black/5">
+                                                                <div className="h-full bg-gray-800 rounded-full" style={{ width: `${Math.max(0, Math.min(1, m.value)) * 100}%` }} />
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                            </div>
+
+                                            <div className="mt-3 text-[11px] text-text-tertiary">
+                                                Base points are added for non-targeted categories; final score is capped at 100.
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <details className="mt-3">
+                                        <summary className="cursor-pointer select-none text-[11px] font-semibold text-text-secondary hover:text-text-primary transition-colors">
+                                            Scoring notes ({affinityResult.reasoning?.length || 0})
+                                        </summary>
+                                        <div className="mt-2 space-y-2">
                                             {affinityResult.reasoning?.map((reason, idx) => (
                                                 <div key={idx} className="flex gap-2 text-[11px] leading-relaxed">
                                                     <span className="text-text-tertiary mt-0.5">•</span>
                                                     <span className={reason.startsWith('Failed') || reason.startsWith('Warning') ? 'text-red-700 font-medium' : 'text-text-secondary'}>{reason}</span>
                                                 </div>
                                             ))}
-
-                                            {affinityResult.bestSegment && (
-                                                <div className="mt-3 bg-white/60 p-2 rounded border border-black/5 flex items-start gap-2 text-[11px] text-text-secondary">
-                                                    <svg viewBox="0 0 24 24" fill="none" className="w-3.5 h-3.5 shrink-0 mt-0.5 text-blue-500"><path d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14v-4zm-3-5a2 2 0 00-2-2H4a2 2 0 00-2 2v10a2 2 0 002 2h6a2 2 0 002-2V5z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
-                                                    <span>Highest visual resonance found at <strong>{fmt(affinityResult.bestSegment.start)} - {fmt(affinityResult.bestSegment.end)}</strong>.</span>
-                                                </div>
-                                            )}
                                         </div>
-                                    </>
-                                ) : (
-                                    <p className="text-[11px] text-text-tertiary text-center">Select a profile to calculate match score.</p>
-                                )}
-                            </div>
+                                    </details>
+                                </>
+                            ) : (
+                                <p className="text-[11px] text-text-tertiary text-center">Select a profile to calculate match score.</p>
+                            )}
                         </div>
                     </div>
                 </div>
