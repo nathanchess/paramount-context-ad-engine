@@ -127,6 +127,7 @@ export async function GET(request) {
           vw_ad_title: parsed.proposedTitle || "untitled",
           vw_iab_t1: policy.effectiveTier1.join(","),
           vw_iab_t2: policy.effectiveTier2.join(","),
+          vw_iab_t3: policy.effectiveTier3.join(","),
           vw_iab_codes: policy.effectiveCodes.join(","),
           vw_iab_conf: policy.averageConfidence.toFixed(3),
         },
@@ -147,6 +148,7 @@ export async function GET(request) {
         effectiveIab: {
           tier1: policy.effectiveTier1,
           tier2: policy.effectiveTier2,
+          tier3: policy.effectiveTier3,
           codes: policy.effectiveCodes,
           averageConfidence: policy.averageConfidence.toFixed(3),
           fallbackApplied: policy.fallbackApplied,

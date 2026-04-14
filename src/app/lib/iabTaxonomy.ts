@@ -3,6 +3,7 @@ import type { IabTaxonomyItem } from "./types";
 type IabCandidate = Partial<IabTaxonomyItem> & {
   tier1?: string;
   tier2?: string;
+  tier3?: string;
   code?: string;
   confidence?: number;
 };
@@ -10,6 +11,7 @@ type IabCandidate = Partial<IabTaxonomyItem> & {
 export type AllowedIabRow = {
   tier1: string;
   tier2: string;
+  tier3?: string;
   code: string;
   /** Extra phrases the model might output; snapped to this row */
   aliases?: string[];
@@ -21,58 +23,156 @@ export type AllowedIabRow = {
  */
 export const IAB_ALLOWED_ROWS: readonly AllowedIabRow[] = [
   {
-    tier1: "Food & Beverage",
-    tier2: "Alcoholic Beverages",
-    code: "IAB8-5",
-    aliases: ["alcohol", "liquor", "beverage alcohol", "bar drinks", "mixed drinks"],
+    tier1: "Alcohol",
+    tier2: "Bars",
+    code: "1002",
+    aliases: ["alcohol", "liquor", "bar", "bar drinks", "mixed drinks"],
   },
   {
-    tier1: "Food & Beverage",
+    tier1: "Alcohol",
+    tier2: "Beer",
+    code: "1003",
+    aliases: ["beer", "brewery", "lager", "ale", "malt beverage"],
+  },
+  {
+    tier1: "Alcohol",
+    tier2: "Hard Sodas, Seltzers, Alco Pops",
+    code: "1004",
+    aliases: ["hard seltzer", "hard soda", "alco pop", "alcopop", "seltzer"],
+  },
+  {
+    tier1: "Alcohol",
+    tier2: "Spirits",
+    code: "1005",
+    aliases: ["spirits", "whiskey", "whisky", "bourbon", "scotch", "vodka", "gin", "rum", "tequila", "cocktail"],
+  },
+  {
+    tier1: "Alcohol",
     tier2: "Wine",
-    code: "IAB8-5",
+    code: "1006",
     aliases: ["wine", "winery", "vino", "sommelier", "champagne", "sparkling wine"],
   },
   {
-    tier1: "Food & Beverage",
-    tier2: "Beer",
-    code: "IAB8-5",
-    aliases: ["beer", "brewery", "lager", "ale"],
-  },
-  {
-    tier1: "Food & Beverage",
-    tier2: "Distilled Spirits",
-    code: "IAB8-5",
-    aliases: ["whiskey", "whisky", "bourbon", "scotch", "vodka", "gin", "rum", "tequila", "cocktail", "mixology"],
-  },
-  {
-    tier1: "Food & Beverage",
-    tier2: "Snack Foods",
-    code: "IAB8-9",
+    tier1: "Consumer Packaged Goods",
+    tier2: "General Food",
+    tier3: "Snacks",
+    code: "1169",
     aliases: ["snack", "snacks", "chips", "crisps", "packaged snacks"],
   },
   {
-    tier1: "Food & Beverage",
-    tier2: "Packaged Foods",
-    code: "IAB8-0",
-    aliases: ["cpg", "grocery", "packaged food", "pantry"],
+    tier1: "Consumer Packaged Goods",
+    tier2: "General Food",
+    tier3: "Cookies & Crackers",
+    code: "1166",
+    aliases: ["cookies", "crackers", "biscuits"],
   },
   {
-    tier1: "Automotive",
-    tier2: "Cars",
-    code: "IAB2-1",
-    aliases: ["car", "sedan", "coupe", "luxury auto", "sports car", "performance car"],
+    tier1: "Consumer Packaged Goods",
+    tier2: "Frozen",
+    tier3: "Frozen Snacks",
+    code: "1157",
+    aliases: ["frozen snack", "frozen snacks", "frozen appetizers"],
   },
   {
-    tier1: "Automotive",
-    tier2: "Trucks & SUVs",
-    code: "IAB2-2",
-    aliases: ["truck", "pickup", "suv", "off road", "4x4", "f 150", "f-150", "ram"],
+    tier1: "Finance and Insurance",
+    tier2: "Banking",
+    code: "1324",
+    aliases: ["banking", "bank", "checking", "savings"],
   },
   {
-    tier1: "Business",
-    tier2: "Finance",
-    code: "IAB3-13",
-    aliases: ["financial services", "investing", "investment", "banking", "retirement", "wealth", "brokerage"],
+    tier1: "Finance and Insurance",
+    tier2: "Credit Cards",
+    code: "1326",
+    aliases: ["credit card", "credit cards", "card rewards"],
+  },
+  {
+    tier1: "Finance and Insurance",
+    tier2: "Insurance",
+    tier3: "Auto Insurance",
+    code: "1328",
+    aliases: ["auto insurance", "car insurance"],
+  },
+  {
+    tier1: "Finance and Insurance",
+    tier2: "Insurance",
+    tier3: "Home Insurance",
+    code: "1329",
+    aliases: ["home insurance", "homeowners insurance"],
+  },
+  {
+    tier1: "Finance and Insurance",
+    tier2: "Insurance",
+    tier3: "Life Insurance",
+    code: "1330",
+    aliases: ["life insurance", "term life"],
+  },
+  {
+    tier1: "Finance and Insurance",
+    tier2: "Retirement Planning",
+    code: "1337",
+    aliases: ["retirement", "retirement planning", "401k"],
+  },
+  {
+    tier1: "Finance and Insurance",
+    tier2: "Stocks and Investments",
+    code: "1338",
+    aliases: ["investing", "investment", "stocks", "portfolio", "brokerage", "wealth management"],
+  },
+  {
+    tier1: "Vehicles",
+    tier2: "Automotive Ownership",
+    tier3: "New Vehicle Ownership",
+    code: "1536",
+    aliases: ["new car", "new vehicle", "new truck"],
+  },
+  {
+    tier1: "Vehicles",
+    tier2: "Automotive Ownership",
+    tier3: "Pre-owned Automotive Ownership",
+    code: "1537",
+    aliases: ["used car", "pre owned", "pre-owned", "certified pre owned"],
+  },
+  {
+    tier1: "Vehicles",
+    tier2: "Vehicle Type",
+    tier3: "Electric Vehicles",
+    code: "1553",
+    aliases: ["electric vehicle", "ev", "electric car"],
+  },
+  {
+    tier1: "Vehicles",
+    tier2: "Vehicle Type",
+    tier3: "Hybrid Vehicles",
+    code: "1555",
+    aliases: ["hybrid", "hybrid vehicle", "hybrid car"],
+  },
+  {
+    tier1: "Vehicles",
+    tier2: "Automotive Services",
+    tier3: "Auto Repair",
+    code: "1544",
+    aliases: ["auto repair", "car repair", "mechanic"],
+  },
+  {
+    tier1: "Vehicles",
+    tier2: "Automotive Services",
+    tier3: "Car Wash",
+    code: "1545",
+    aliases: ["car wash", "detailing", "auto detailing"],
+  },
+  {
+    tier1: "Vehicles",
+    tier2: "Vehicle Type",
+    tier3: "Gas Vehicles",
+    code: "1554",
+    aliases: ["gas vehicle", "gas car", "petrol car"],
+  },
+  {
+    tier1: "Vehicles",
+    tier2: "Vehicle Type",
+    tier3: "Diesel Vehicles",
+    code: "1552",
+    aliases: ["diesel", "diesel vehicle", "diesel truck"],
   },
 ];
 
@@ -80,6 +180,7 @@ export type IabPolicyResult = {
   normalizedItems: IabTaxonomyItem[];
   effectiveTier1: string[];
   effectiveTier2: string[];
+  effectiveTier3: string[];
   effectiveCodes: string[];
   averageConfidence: number;
   fallbackApplied: boolean;
@@ -90,12 +191,12 @@ const IAB_HIGH_CONFIDENCE = 0.75;
 const IAB_MEDIUM_CONFIDENCE = 0.5;
 
 const FALLBACK_BY_CATEGORY_KEY: Record<string, IabTaxonomyItem[]> = {
-  alcohol_premium: [{ tier1: "Food & Beverage", tier2: "Distilled Spirits", code: "IAB8-5", confidence: 0.4 }],
-  alcohol_beer: [{ tier1: "Food & Beverage", tier2: "Beer", code: "IAB8-5", confidence: 0.4 }],
-  automotive_truck: [{ tier1: "Automotive", tier2: "Trucks & SUVs", code: "IAB2-2", confidence: 0.4 }],
-  automotive_luxury: [{ tier1: "Automotive", tier2: "Cars", code: "IAB2-1", confidence: 0.4 }],
-  cpg_snacks: [{ tier1: "Food & Beverage", tier2: "Snack Foods", code: "IAB8-9", confidence: 0.4 }],
-  financial_services: [{ tier1: "Business", tier2: "Finance", code: "IAB3-13", confidence: 0.4 }],
+  alcohol_premium: [{ tier1: "Alcohol", tier2: "Spirits", code: "1005", confidence: 0.4 }],
+  alcohol_beer: [{ tier1: "Alcohol", tier2: "Beer", code: "1003", confidence: 0.4 }],
+  automotive_truck: [{ tier1: "Vehicles", tier2: "Vehicle Type", tier3: "Diesel Vehicles", code: "1552", confidence: 0.4 }],
+  automotive_luxury: [{ tier1: "Vehicles", tier2: "Automotive Ownership", tier3: "New Vehicle Ownership", code: "1536", confidence: 0.4 }],
+  cpg_snacks: [{ tier1: "Consumer Packaged Goods", tier2: "General Food", tier3: "Snacks", code: "1169", confidence: 0.4 }],
+  financial_services: [{ tier1: "Finance and Insurance", tier2: "Stocks and Investments", code: "1338", confidence: 0.4 }],
 };
 
 function norm(text: string): string {
@@ -105,31 +206,31 @@ function norm(text: string): string {
 /** JSON block injected into the analyze prompt */
 export function formatIabTableForPrompt(categoryKey: string, categoryLabel: string): string {
   const rowsJson = JSON.stringify(
-    IAB_ALLOWED_ROWS.map(({ tier1, tier2, code }) => ({ tier1, tier2, code })),
+    IAB_ALLOWED_ROWS.map(({ tier1, tier2, tier3, code }) => ({ tier1, tier2, tier3: tier3 || "", code })),
     null,
     2
   );
 
   const verticalGuide: Record<string, string> = {
     alcohol_premium:
-      "Premium spirits / wine / cocktails: prefer rows under Food & Beverage with tier2 Wine, Distilled Spirits, Beer, or Alcoholic Beverages when the creative shows alcohol.",
+      "Premium spirits / wine / cocktails: prefer Alcohol rows like Spirits or Wine when the creative shows alcohol.",
     alcohol_beer:
-      "Beer and malt beverages: prefer tier2 Beer or Alcoholic Beverages when the creative clearly shows beer.",
+      "Beer and malt beverages: prefer Alcohol / Beer when the creative clearly shows beer.",
     automotive_truck:
-      "Truck and utility messaging: prefer Automotive / Trucks & SUVs when the creative shows pickups, towing, off-road, or work sites.",
+      "Truck and utility messaging: prefer Vehicles rows such as Vehicle Type (Diesel/Gas) or Automotive Ownership when the creative shows pickups, towing, off-road, or work sites.",
     automotive_luxury:
-      "Luxury or performance cars: prefer Automotive / Cars when the creative shows sedans, coupes, or performance driving.",
+      "Luxury or performance cars: prefer Vehicles / Automotive Ownership with a specific tier3 when possible.",
     cpg_snacks:
-      "Packaged snacks and CPG: prefer Food & Beverage / Snack Foods or Packaged Foods when the creative shows chips, cookies, party snacks, or grocery CPG.",
+      "Packaged snacks and CPG: prefer Consumer Packaged Goods / General Food with tier3 Snacks or Cookies & Crackers when the creative shows chips, cookies, party snacks, or grocery CPG.",
     financial_services:
-      "Banking, investing, retirement: prefer Business / Finance when the creative shows planning, portfolios, advisors, or wealth messaging.",
+      "Banking, investing, retirement: prefer Finance and Insurance rows such as Banking, Stocks and Investments, Retirement Planning, or Insurance tier3 classes.",
   };
 
   const guide =
     verticalGuide[categoryKey] ||
     "Pick the rows that honestly match the video creative; every iab object must still be copied exactly from the allowed list.";
 
-  return `ALLOWED IAB TAXONOMY (closed set — each object in "iab" MUST be copied exactly from this list: same tier1, tier2, and code strings character-for-character. Do not invent codes, tiers, or rows outside this list.)
+  return `ALLOWED IAB TAXONOMY (closed set — each object in "iab" MUST be copied exactly from this list: same tier1, tier2, tier3 (when present), and code strings character-for-character. Do not invent codes, tiers, or rows outside this list.)
 ${rowsJson}
 
 CURRENT AD INVENTORY VERTICAL: "${categoryLabel}" (internal key: ${categoryKey}).
@@ -146,6 +247,7 @@ function collectAliasTargets(row: AllowedIabRow): string[] {
   const set = new Set<string>();
   set.add(norm(row.tier1));
   set.add(norm(row.tier2));
+  if (row.tier3) set.add(norm(row.tier3));
   for (const a of row.aliases || []) set.add(norm(a));
   return [...set];
 }
@@ -153,38 +255,42 @@ function collectAliasTargets(row: AllowedIabRow): string[] {
 function snapCandidateToAllowedRow(candidate: IabCandidate): IabTaxonomyItem | null {
   const tier1 = typeof candidate.tier1 === "string" ? candidate.tier1.trim() : "";
   const tier2 = typeof candidate.tier2 === "string" ? candidate.tier2.trim() : "";
+  const tier3 = typeof candidate.tier3 === "string" ? candidate.tier3.trim() : "";
   const code = typeof candidate.code === "string" ? candidate.code.trim().toUpperCase() : "";
   const confidence = clampConfidence(candidate.confidence);
 
   const n1 = norm(tier1);
   const n2 = norm(tier2);
+  const n3 = norm(tier3);
 
-  if (!tier1 && !tier2 && !code) return null;
+  if (!tier1 && !tier2 && !tier3 && !code) return null;
 
-  const exact = IAB_ALLOWED_ROWS.find((r) => norm(r.tier1) === n1 && norm(r.tier2) === n2);
+  const exact = IAB_ALLOWED_ROWS.find(
+    (r) => norm(r.tier1) === n1 && norm(r.tier2) === n2 && norm(r.tier3 || "") === n3
+  );
   if (exact) {
-    return { tier1: exact.tier1, tier2: exact.tier2, code: exact.code, confidence };
+    return { tier1: exact.tier1, tier2: exact.tier2, tier3: exact.tier3, code: exact.code, confidence };
   }
 
   const byT2 = IAB_ALLOWED_ROWS.filter((r) => norm(r.tier2) === n2);
   if (byT2.length === 1) {
     const r = byT2[0];
-    return { tier1: r.tier1, tier2: r.tier2, code: r.code, confidence };
+    return { tier1: r.tier1, tier2: r.tier2, tier3: r.tier3, code: r.code, confidence };
   }
 
   if (code) {
     const byCode = IAB_ALLOWED_ROWS.filter((r) => r.code.toUpperCase() === code);
     if (byCode.length === 1) {
       const r = byCode[0];
-      return { tier1: r.tier1, tier2: r.tier2, code: r.code, confidence };
+      return { tier1: r.tier1, tier2: r.tier2, tier3: r.tier3, code: r.code, confidence };
     }
-    if (byCode.length > 1 && n2) {
-      const hit = byCode.find((r) => norm(r.tier2) === n2);
-      if (hit) return { tier1: hit.tier1, tier2: hit.tier2, code: hit.code, confidence };
+    if (byCode.length > 1 && (n2 || n3)) {
+      const hit = byCode.find((r) => norm(r.tier2) === n2 && norm(r.tier3 || "") === n3);
+      if (hit) return { tier1: hit.tier1, tier2: hit.tier2, tier3: hit.tier3, code: hit.code, confidence };
     }
   }
 
-  const probe = n2 || n1;
+  const probe = n3 || n2 || n1;
   if (probe) {
     const matchedRows: AllowedIabRow[] = [];
     for (const row of IAB_ALLOWED_ROWS) {
@@ -192,11 +298,14 @@ function snapCandidateToAllowedRow(candidate: IabCandidate): IabTaxonomyItem | n
     }
     if (matchedRows.length === 1) {
       const r = matchedRows[0];
-      return { tier1: r.tier1, tier2: r.tier2, code: r.code, confidence };
+      return { tier1: r.tier1, tier2: r.tier2, tier3: r.tier3, code: r.code, confidence };
     }
     if (matchedRows.length > 1) {
-      const prefer = matchedRows.find((r) => norm(r.tier2) === n2) || matchedRows[0];
-      return { tier1: prefer.tier1, tier2: prefer.tier2, code: prefer.code, confidence };
+      const prefer =
+        matchedRows.find((r) => norm(r.tier3 || "") === n3) ||
+        matchedRows.find((r) => norm(r.tier2) === n2) ||
+        matchedRows[0];
+      return { tier1: prefer.tier1, tier2: prefer.tier2, tier3: prefer.tier3, code: prefer.code, confidence };
     }
   }
 
@@ -206,7 +315,7 @@ function snapCandidateToAllowedRow(candidate: IabCandidate): IabTaxonomyItem | n
 function dedupeAndSort(items: IabTaxonomyItem[]): IabTaxonomyItem[] {
   const deduped = new Map<string, IabTaxonomyItem>();
   for (const item of items) {
-    const key = `${item.code}|${item.tier1}|${item.tier2}`;
+    const key = `${item.code}|${item.tier1}|${item.tier2}|${item.tier3 || ""}`;
     const prior = deduped.get(key);
     if (!prior || item.confidence > prior.confidence) deduped.set(key, item);
   }
@@ -253,6 +362,9 @@ export function normalizeIabWithPolicy(
   const effectiveTier2 = high.length > 0
     ? [...new Set(effectiveItems.map((item) => item.tier2))]
     : [];
+  const effectiveTier3 = high.length > 0
+    ? [...new Set(effectiveItems.map((item) => item.tier3).filter((tier3): tier3 is string => Boolean(tier3)))]
+    : [];
   const effectiveCodes = high.length > 0
     ? [...new Set(effectiveItems.map((item) => item.code).filter(Boolean))]
     : [];
@@ -265,6 +377,7 @@ export function normalizeIabWithPolicy(
     normalizedItems,
     effectiveTier1,
     effectiveTier2,
+    effectiveTier3,
     effectiveCodes,
     averageConfidence,
     fallbackApplied,

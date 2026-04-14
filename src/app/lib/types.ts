@@ -32,6 +32,8 @@ export interface IabTaxonomyItem {
   tier1: string;
   /** Tier-2 IAB category label (subcategory). */
   tier2: string;
+  /** Tier-3 taxonomy label (more specific leaf), when available. */
+  tier3?: string;
   /** IAB taxonomy code when available (e.g. "IAB1-5"). */
   code: string;
   /** Model confidence score in [0, 1]. */
@@ -42,6 +44,7 @@ export interface IabTaxonomySummary {
   iab: IabTaxonomyItem[];
   iabTopTier1: string[];
   iabTopTier2: string[];
+  iabTopTier3?: string[];
 }
 
 // ── Ad Break Fitness ─────────────────────────────────────────
