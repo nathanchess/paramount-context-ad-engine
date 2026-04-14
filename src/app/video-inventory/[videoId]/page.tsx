@@ -438,22 +438,22 @@ function SafetyModeInfoModal({ onClose }: { onClose: () => void }) {
       key: "strict",
       label: "Strict",
       color: "text-green-700 bg-green-50 border-green-200",
-      description: "Most conservative filtering. Ads are only placed in scenes that pass every GARM flag check, have low interruption risk, and explicit suitable-category matches. Prioritises brand safety over revenue. Best for news, family content, or premium advertisers.",
-      traits: ["Low interruption risk required", "No GARM flags tolerated", "Explicit category match enforced", "Minimum score floor raised"],
+      description: "Strongest penalties on ad breaks and rankings when interruption risk is high, sentiment is negative or mixed, or tone is tense or dramatic. Unsafe GARM segments are excluded. Favours calmer, lower-risk moments.",
+      traits: ["Break scores hit hardest by interruption + tense tone", "Eligible ad rankings damped on edgy segments", "GARM: zeroes unsafe break windows"],
     },
     {
       key: "balanced",
       label: "Balanced",
       color: "text-amber-700 bg-amber-50 border-amber-200",
-      description: "Default mode. Balances brand safety with ad revenue. Allows moderate interruption risk and soft category matches. GARM flags are evaluated but medium-risk scenes remain eligible. Suitable for most content types.",
-      traits: ["Moderate interruption risk allowed", "Medium GARM risk tolerated", "Soft category matching", "Standard score thresholds"],
+      description: "Default. Uses the same signals with lighter penalties than strict. High GARM risk halves break scores; medium risk halves in balanced break selection only.",
+      traits: ["Milder break and rank penalties vs strict", "GARM: high risk removes breaks; medium halves break score"],
     },
     {
       key: "revenue_max",
       label: "Revenue Max",
       color: "text-red-700 bg-red-50 border-red-200",
-      description: "Maximises ad break opportunities by relaxing safety constraints. Higher interruption risk scenes become eligible, category matching is looser, and break spacing is tightened. Use only when ad density is the primary objective.",
-      traits: ["High interruption risk allowed", "Looser category matching", "Reduced minimum spacing", "More breaks identified"],
+      description: "Boosts break and ad scores when interruption is low and sentiment is positive—so more inventory clears and ranks higher without loosening user eligibility gates.",
+      traits: ["Break scores boosted on clean, positive moments", "Eligible ads rank higher on smooth segments", "GARM: only explicit unsafe breaks removed"],
     },
   ];
 
@@ -478,7 +478,7 @@ function SafetyModeInfoModal({ onClose }: { onClose: () => void }) {
         </div>
         <div className="px-5 py-4 space-y-3">
           <p className="text-[12px] text-text-secondary leading-relaxed">
-            Safety mode controls how aggressively the engine filters ad break candidates based on brand safety, interruption risk, and contextual match quality.
+            Modes always adjust scoring using interruption risk, sentiment, and tone (so you see a difference even when every scene is GARM-safe). GARM fields still zero or down-rank breaks when the model flags real risk.
           </p>
           {modes.map((m) => (
             <div key={m.key} className={`rounded-xl border px-4 py-3 ${m.color}`}>
@@ -516,7 +516,7 @@ export default function VideoInventoryDetailPage() {
   const params = useParams();
   const videoId = params.videoId as string;
 
-  const { videos, loading } = useVideos("tl-context-engine-videos");
+  const { videos, loading } = useVideos("tl-context-engine-videos", { includeEmbeddings: false });
   const video = useMemo(() => videos.find((v) => v.id === videoId) || null, [videos, videoId]);
 
   /* Video player state */
@@ -549,7 +549,7 @@ export default function VideoInventoryDetailPage() {
   const [adInventory, setAdInventory] = useState<AdInventoryItem[]>([]);
   const [adInventoryLoading, setAdInventoryLoading] = useState(false);
 
-  /* Embedding state — segment vectors fetched from /api/embeddings */
+  /* Embedding state — segment vectors fetched from /api/embeddings (only when ranking ads) */
   const embeddingsFetchedRef = useRef(false);
   const [segmentVectors, setSegmentVectors] = useState<Record<string, number[]>>({});
   const [embeddingsLoading, setEmbeddingsLoading] = useState(false);
@@ -758,9 +758,16 @@ export default function VideoInventoryDetailPage() {
     })();
   }, []);
 
-  /* Embeddings fetch — triggers after segments are loaded */
   useEffect(() => {
-    if (!segments || segments.length === 0 || !videoId || embeddingsFetchedRef.current) return;
+    embeddingsFetchedRef.current = false;
+    setSegmentVectors({});
+  }, [videoId]);
+
+  /* Embeddings — only when scene segments exist and there is ad inventory to rank (Marengo signal D) */
+  useEffect(() => {
+    if (!segments || segments.length === 0 || !videoId) return;
+    if (adInventory.length === 0) return;
+    if (embeddingsFetchedRef.current) return;
     embeddingsFetchedRef.current = true;
     (async () => {
       setEmbeddingsLoading(true);
@@ -769,7 +776,6 @@ export default function VideoInventoryDetailPage() {
         if (!res.ok) return;
         const data = await res.json();
         if (data?.segments && Object.keys(data.segments).length > 0) {
-          // Convert string keys back to numbers for indexing
           const vectors: Record<string, number[]> = {};
           for (const [k, v] of Object.entries(data.segments)) {
             vectors[k] = v as number[];
@@ -782,7 +788,7 @@ export default function VideoInventoryDetailPage() {
         setEmbeddingsLoading(false);
       }
     })();
-  }, [segments, videoId]);
+  }, [segments, videoId, adInventory.length]);
 
   /* Reset triggered breaks when segment data changes */
   useEffect(() => {
@@ -981,6 +987,9 @@ export default function VideoInventoryDetailPage() {
                         </button>
                       ))}
                     </div>
+                    <p className="text-[10px] text-text-tertiary mt-1.5 leading-snug">
+                      Affects break ranking and ad scores from interruption, sentiment, and tone (see info).
+                    </p>
                   </div>
                   <div>
                     <label className="text-[10px] font-semibold uppercase tracking-wider text-text-tertiary block mb-1.5">

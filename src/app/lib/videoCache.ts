@@ -12,7 +12,9 @@ export type CachedVideoEmbeddingSegment = {
 
 export interface CachedVideo {
     id: string;
-    hls?: { videoUrl?: string; thumbnailUrls?: string[] };
+    /** True when the video is still being indexed by TwelveLabs (no HLS URL yet). */
+    processing?: boolean;
+    hls?: { videoUrl?: string; thumbnailUrls?: string[]; status?: string };
     systemMetadata?: {
         filename?: string; duration?: number; width?: number; height?: number; fps?: number; size?: number;
     };
@@ -30,18 +32,22 @@ interface CacheEntry {
     embeddingsOmitted?: boolean;
 }
 
+interface UseVideosOptions {
+    includeEmbeddings?: boolean;
+}
+
 /* ── Config ─────────────────────────────────────────────── */
 const CACHE_KEY_PREFIX = "tl_video_cache_v2_";
 const STALE_MS = 7 * 24 * 60 * 60 * 1000;  // 7 days — refetch in background after this
 
 /* ── Low-level localStorage helpers ─────────────────────── */
-function getCacheKey(index: string): string {
-    return `${CACHE_KEY_PREFIX}${index}`;
+function getCacheKey(index: string, includeEmbeddings: boolean): string {
+    return `${CACHE_KEY_PREFIX}${index}_${includeEmbeddings ? "full" : "meta"}`;
 }
 
-function readCache(index: string): CacheEntry | null {
+function readCache(index: string, includeEmbeddings: boolean): CacheEntry | null {
     try {
-        const raw = localStorage.getItem(getCacheKey(index));
+        const raw = localStorage.getItem(getCacheKey(index, includeEmbeddings));
         if (!raw) return null;
         return JSON.parse(raw) as CacheEntry;
     } catch { return null; }
@@ -63,8 +69,8 @@ function isQuotaError(err: unknown): boolean {
     ) || (err instanceof Error && err.name === "QuotaExceededError");
 }
 
-function writeCache(index: string, videos: CachedVideo[]): void {
-    const key = getCacheKey(index);
+function writeCache(index: string, includeEmbeddings: boolean, videos: CachedVideo[]): void {
+    const key = getCacheKey(index, includeEmbeddings);
     const ts = Date.now();
 
     const trySet = (entry: CacheEntry): boolean => {
@@ -113,9 +119,9 @@ function writeCache(index: string, videos: CachedVideo[]): void {
  * Call this after a successful video upload so the next
  * page load fetches fresh data.
  */
-export function invalidateVideoCache(index: string = "tl-context-engine-ads"): void {
+export function invalidateVideoCache(index: string = "tl-context-engine-ads", includeEmbeddings = true): void {
     try {
-        localStorage.removeItem(getCacheKey(index));
+        localStorage.removeItem(getCacheKey(index, includeEmbeddings));
     } catch { /* noop */ }
 }
 
@@ -130,22 +136,26 @@ export function invalidateVideoCache(index: string = "tl-context-engine-ads"): v
  * 2. Background fetch updates both state and cache.
  * 3. `refresh()` can be called manually (e.g. after upload).
  */
-export function useVideos(index: string = "tl-context-engine-ads") {
+export function useVideos(index: string = "tl-context-engine-ads", options: UseVideosOptions = {}) {
+    const includeEmbeddings = options.includeEmbeddings ?? true;
     const [videos, setVideos] = useState<CachedVideo[]>([]);
     const [loading, setLoading] = useState(true);
     const fetchingRef = useRef(false);
 
     // Fetch from API and update cache + state
-    const fetchFresh = useCallback(async (showLoading: boolean) => {
+    const fetchFresh = useCallback(async (showLoading: boolean, serverRefresh = false) => {
         if (fetchingRef.current) return;
         fetchingRef.current = true;
         if (showLoading) setLoading(true);
 
         try {
-            const res = await fetch(`/api/videos?index=${encodeURIComponent(index)}`);
+            const url = serverRefresh
+                ? `/api/videos?index=${encodeURIComponent(index)}&refresh=true&embeddings=${includeEmbeddings ? "full" : "none"}`
+                : `/api/videos?index=${encodeURIComponent(index)}&embeddings=${includeEmbeddings ? "full" : "none"}`;
+            const res = await fetch(url);
             if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
             const data: CachedVideo[] = await res.json();
-            writeCache(index, data);
+            writeCache(index, includeEmbeddings, data);
             setVideos(data);
         } catch (err) {
             console.error("[useVideos] Fetch error:", err);
@@ -153,11 +163,11 @@ export function useVideos(index: string = "tl-context-engine-ads") {
 
         setLoading(false);
         fetchingRef.current = false;
-    }, [index]);
+    }, [index, includeEmbeddings]);
 
     // On mount: read cache, decide whether to fetch
     useEffect(() => {
-        const cached = readCache(index);
+        const cached = readCache(index, includeEmbeddings);
 
         if (cached && cached.videos.length > 0) {
             // Serve cached data immediately
@@ -174,13 +184,13 @@ export function useVideos(index: string = "tl-context-engine-ads") {
             // No cache — must fetch with loading spinner
             fetchFresh(true);
         }
-    }, [index, fetchFresh]);
+    }, [index, includeEmbeddings, fetchFresh]);
 
-    /** Force a fresh fetch (e.g. after upload). Shows loading state. */
+    /** Force a fresh fetch (e.g. after upload). Shows loading state and bypasses both localStorage and the Vercel Blob cache. */
     const refresh = useCallback(() => {
-        invalidateVideoCache(index);
-        return fetchFresh(true);
-    }, [index, fetchFresh]);
+        invalidateVideoCache(index, includeEmbeddings);
+        return fetchFresh(true, true); // serverRefresh=true busts the Vercel Blob cache too
+    }, [index, includeEmbeddings, fetchFresh]);
 
     return { videos, loading, refresh };
 }

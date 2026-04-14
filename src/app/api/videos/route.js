@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server"
 import { getTwelveLabsClient, getIndexId } from "../../lib/twelvelabs"
-import { list, put } from '@vercel/blob';
+import { put, del } from '@vercel/blob';
+import { listAllBlobs } from '../../lib/blobList';
+
+const BLOB_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
 export const dynamic = 'force-dynamic';
 
@@ -10,29 +13,41 @@ export async function GET(request) {
     const targetIndex = searchParams.get("index") || "tl-context-engine-ads"
     console.log(`[DEBUG] /api/videos requested with targetIndex="${targetIndex}"`);
     const forceRefresh = searchParams.get("refresh") === "true";
+    const includeEmbeddings = searchParams.get("embeddings") !== "none";
+    const payloadMode = includeEmbeddings ? "full" : "meta";
 
     const tl_client = getTwelveLabsClient()
     const indexId = await getIndexId(targetIndex)
 
-    const blobName = `api_video_cache_v2_${indexId}.json`;
+    const blobName = `api_video_cache_v3_${indexId}_${payloadMode}.json`;
 
     if (!forceRefresh) {
         try {
-            const { blobs } = await list({ prefix: blobName });
+            const blobs = await listAllBlobs(blobName);
             if (blobs.length > 0) {
-                console.log(`[DEBUG] Fetching video list from Vercel Blob cache for indexId=${indexId} (indexName=${targetIndex})`);
-                const cachedRes = await fetch(blobs[0].url);
-                if (cachedRes.ok) {
-                    const cachedData = await cachedRes.json();
-                    const count = Array.isArray(cachedData) ? cachedData.length : 0;
-                    console.log(`[DEBUG] Blob cache for indexName=${targetIndex} contains ${count} videos.`);
+                const cacheBlob = blobs.reduce((a, b) =>
+                    new Date(a.uploadedAt).getTime() > new Date(b.uploadedAt).getTime() ? a : b
+                );
+                const cacheAge = Date.now() - new Date(cacheBlob.uploadedAt).getTime();
+                const cacheExpired = cacheAge > BLOB_CACHE_TTL_MS;
 
-                    // Only short‑circuit if cache actually has videos.
-                    if (count > 0) {
-                        console.log(`[DEBUG] Returning cached videos for indexName=${targetIndex}`);
-                        return NextResponse.json(cachedData, { status: 200 });
-                    } else {
-                        console.log(`[DEBUG] Blob cache for indexName=${targetIndex} is empty, falling back to live TwelveLabs fetch.`);
+                if (cacheExpired) {
+                    console.log(`[DEBUG] Blob cache for indexName=${targetIndex} is ${Math.round(cacheAge / 3600000)}h old (TTL=6h) — refreshing from TwelveLabs.`);
+                } else {
+                    console.log(`[DEBUG] Fetching video list from Vercel Blob cache for indexId=${indexId} (indexName=${targetIndex})`);
+                    const cachedRes = await fetch(cacheBlob.url);
+                    if (cachedRes.ok) {
+                        const cachedData = await cachedRes.json();
+                        const count = Array.isArray(cachedData) ? cachedData.length : 0;
+                        console.log(`[DEBUG] Blob cache for indexName=${targetIndex} contains ${count} videos.`);
+
+                        // Only short‑circuit if cache actually has videos.
+                        if (count > 0) {
+                            console.log(`[DEBUG] Returning cached videos for indexName=${targetIndex}`);
+                            return NextResponse.json(cachedData, { status: 200 });
+                        } else {
+                            console.log(`[DEBUG] Blob cache for indexName=${targetIndex} is empty, falling back to live TwelveLabs fetch.`);
+                        }
                     }
                 }
             } else {
@@ -49,32 +64,73 @@ export async function GET(request) {
     const videos = []
 
     for await (const video of videoPager) {
-        const videoData = await tl_client.indexes.videos.retrieve(
-            indexId,
-            video.id,
-            {
-                embeddingOption: ['visual', 'audio', 'transcription']
-            }
-        )
+        const videoData = includeEmbeddings
+            ? await tl_client.indexes.videos.retrieve(
+                indexId,
+                video.id,
+                {
+                    embeddingOption: ['visual', 'audio', 'transcription']
+                }
+            )
+            : await tl_client.indexes.videos.retrieve(indexId, video.id)
 
-        let embeddings = [];
-        const segments = videoData.embedding?.videoEmbedding?.segments || [];
-
-        if (segments.length > 0) {
-            embeddings = segments.map(seg => ({
-                startOffsetSec: seg.startOffsetSec,
-                endOffsetSec: seg.endOffsetSec,
-                vector: seg.float
-            }));
-        }
-
-        console.log(`[DEBUG] Video ${videoData.id} has ${segments.length} segments`);
-
-        // Explicitly extract fields into a plain serializable object
-        // The SDK may return camelCase or snake_case depending on method
+        // Extract fields early — needed by both the processing branch and the ready branch.
         const hlsData = videoData.hls || {};
         const sysMeta = videoData.systemMetadata || {};
         const rawUserMeta = videoData.userMetadata || videoData.user_metadata || null;
+        const hlsStatus = hlsData.status || hlsData.video_status || null;
+
+        // Statuses that mean TwelveLabs is still indexing — not yet playable.
+        // "COMPLETE" and "ready" both mean fully indexed.
+        const PROCESSING_STATUSES = new Set([
+            'processing', 'PROCESSING',
+            'pending', 'PENDING',
+            'indexing', 'INDEXING',
+            'queued', 'QUEUED',
+        ]);
+        const isProcessing = hlsStatus && PROCESSING_STATUSES.has(hlsStatus);
+
+        if (isProcessing) {
+            console.log(`[DEBUG] Video ${videoData.id} is still processing (HLS status "${hlsStatus}") — including with processing flag.`);
+            // Include with limited data so the UI can show a "processing" state.
+            videos.push({
+                id: videoData.id,
+                createdAt: videoData.createdAt,
+                indexedAt: videoData.indexedAt,
+                processing: true,
+                systemMetadata: {
+                    filename: sysMeta.filename || null,
+                    duration: 0,
+                    fps: sysMeta.fps || 0,
+                    width: sysMeta.width || 0,
+                    height: sysMeta.height || 0,
+                    size: sysMeta.size || 0,
+                },
+                hls: {
+                    videoUrl: null,
+                    thumbnailUrls: hlsData.thumbnailUrls || hlsData.thumbnail_urls || [],
+                    status: hlsStatus,
+                },
+                userMetadata: typeof rawUserMeta === 'string'
+                    ? rawUserMeta
+                    : (rawUserMeta ? JSON.stringify(rawUserMeta) : null),
+                embedding_segments: [],
+            });
+            continue;
+        }
+
+        let embeddings = [];
+        if (includeEmbeddings) {
+            const segments = videoData.embedding?.videoEmbedding?.segments || [];
+            if (segments.length > 0) {
+                embeddings = segments.map(seg => ({
+                    startOffsetSec: seg.startOffsetSec,
+                    endOffsetSec: seg.endOffsetSec,
+                    vector: seg.float
+                }));
+            }
+            console.log(`[DEBUG] Video ${videoData.id} has ${segments.length} segments`);
+        }
 
         videos.push({
             id: videoData.id,
@@ -143,6 +199,11 @@ export async function POST(request) {
 
     const tl_client = getTwelveLabsClient()
     const indexId = await getIndexId(target_index || "tl-context-engine-ads")
+    const uploadBlobPrefixes = [
+        `api_video_cache_v3_${indexId}_full.json`,
+        `api_video_cache_v3_${indexId}_meta.json`,
+        `api_video_cache_v2_${indexId}.json`, // legacy
+    ];
 
     const totalVideos = videoURLs.length
 
@@ -259,6 +320,20 @@ export async function POST(request) {
                     percent: 100,
                     videos: videoData,
                 })
+
+                // Invalidate Vercel Blob caches so the next GET /api/videos
+                // fetches fresh data from TwelveLabs (including newly uploaded videos).
+                try {
+                    for (const prefix of uploadBlobPrefixes) {
+                        const staleBlobs = await listAllBlobs(prefix);
+                        if (staleBlobs.length > 0) {
+                            await del(staleBlobs.map(b => b.url));
+                            console.log(`[DEBUG] Invalidated Vercel Blob cache: ${prefix}`);
+                        }
+                    }
+                } catch (delErr) {
+                    console.error('[DEBUG] Failed to invalidate Vercel Blob cache after upload:', delErr);
+                }
 
                 try {
                     controller.close()

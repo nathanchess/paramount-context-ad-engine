@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { list, del } from '@vercel/blob';
+import { del } from '@vercel/blob';
+import { listAllBlobs } from '../../../lib/blobList';
 
 /**
  * Clears all `analysis_*.json` blobs (Pegasus metadata cache).
@@ -27,7 +28,7 @@ export async function POST(request) {
     }
 
     try {
-        const { blobs } = await list({ prefix: 'analysis_' });
+        const blobs = await listAllBlobs('analysis_');
         const blobUrls = blobs.map(b => b.url);
 
         if (blobUrls.length > 0) {

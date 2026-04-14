@@ -1,6 +1,7 @@
 import { TwelveLabs } from "twelvelabs-js";
 import { NextResponse } from "next/server";
-import { list, put } from "@vercel/blob";
+import { put } from "@vercel/blob";
+import { listAllBlobs } from "../../lib/blobList";
 
 export const maxDuration = 600;
 
@@ -14,17 +15,17 @@ const CACHE_VERSION = "v1";
    ═══════════════════════════════════════════════════════════ */
 
 const cast_prompt = `
-You are a broadcast ad-ops analyst for a premium CTV platform.
+    You are a broadcast ad-ops analyst for a premium CTV platform.
 
-Watch this entire video and identify every on-screen person.
+    Watch this entire video and identify every on-screen person.
 
-For each person provide:
-- "name": Their real name if it can be determined from dialogue, chyrons, credits, or well-known public identity. Otherwise use a descriptive label (e.g. "Woman in red dress").
-- "description": A brief physical or contextual descriptor so they can be tracked across scenes (e.g. "Tall brunette woman with hoop earrings, central to most confrontations").
+    For each person provide:
+    - "name": Their real name if it can be determined from dialogue, chyrons, credits, or well-known public identity. Otherwise use a descriptive label (e.g. "Woman in red dress").
+    - "description": A brief physical or contextual descriptor so they can be tracked across scenes (e.g. "Tall brunette woman with hoop earrings, central to most confrontations").
 
-Only include the main cast, no need to include background characters, narrators, or hosts.
+    Only include the main cast, no need to include background characters, narrators, or hosts.
 
-Return ONLY the JSON. No markdown fences.
+    Return ONLY the JSON. No markdown fences.
 `;
 
 const cast_response_format = {
@@ -231,10 +232,13 @@ export async function POST(request) {
 
     try {
         /* ── Check cache ─────────────────────────────────── */
-        const { blobs } = await list({ prefix: blobName });
+        const blobs = await listAllBlobs(blobName);
         if (blobs.length > 0) {
             console.log(`[generateAdPlan] Cache HIT for ${videoId}`);
-            const cachedRes = await fetch(blobs[0].url);
+            const best = blobs.reduce((a, b) =>
+                new Date(a.uploadedAt).getTime() > new Date(b.uploadedAt).getTime() ? a : b
+            );
+            const cachedRes = await fetch(best.url);
             if (cachedRes.ok) {
                 const cachedData = await cachedRes.json();
                 if (cachedData?.segments?.length > 0) {

@@ -1,40 +1,76 @@
-import { list } from '@vercel/blob';
 import { NextResponse } from 'next/server';
+import { listAllBlobs } from '../../lib/blobList';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(request) {
+const ANALYSIS_V4_PREFIX = 'analysis_v4_';
+/** Matches blob pathname: analysis_v4_<videoId>_<contractHash>.json */
+const V4_VIDEO_ID_RE = /^analysis_v4_([^_]+)_/;
+
+function parseAnalysisPayload(rawResult) {
+    let parsed = rawResult;
+    if (typeof rawResult === 'string' || rawResult?.data || rawResult?.text) {
+        const rawStr =
+            typeof rawResult === 'string'
+                ? rawResult
+                : (rawResult.data || rawResult.text || JSON.stringify(rawResult));
+        const jsonMatch = rawStr.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            try {
+                parsed = JSON.parse(jsonMatch[0]);
+            } catch {
+                return null;
+            }
+        }
+    }
+    return parsed && typeof parsed === 'object' ? parsed : null;
+}
+
+export async function GET() {
     try {
-        const { blobs } = await list({ prefix: 'analysis_' });
+        const blobs = await listAllBlobs(ANALYSIS_V4_PREFIX);
+        const bestByVideoId = new Map();
+
+        for (const blob of blobs) {
+            const pathname = blob.pathname || '';
+            const match = pathname.match(V4_VIDEO_ID_RE);
+            const videoId = match?.[1];
+            if (!videoId) continue;
+
+            const prior = bestByVideoId.get(videoId);
+            const t = new Date(blob.uploadedAt).getTime();
+            if (!prior || t > new Date(prior.uploadedAt).getTime()) {
+                bestByVideoId.set(videoId, blob);
+            }
+        }
+
+        const winners = [...bestByVideoId.values()];
         const analysisMap = {};
 
-        // Fetch all cached analyses in parallel
-        await Promise.all(blobs.map(async (blob) => {
-            const videoId = blob.pathname.replace('analysis_', '').replace('.json', '');
-            try {
-                const req = await fetch(blob.url);
-                if (req.ok) {
+        await Promise.all(
+            winners.map(async (blob) => {
+                const pathname = blob.pathname || '';
+                const match = pathname.match(V4_VIDEO_ID_RE);
+                const videoId = match?.[1];
+                if (!videoId) return;
+
+                try {
+                    const req = await fetch(blob.url);
+                    if (!req.ok) return;
                     const rawResult = await req.json();
-                    let parsed = rawResult;
-
-                    if (typeof rawResult === "string" || rawResult.data || rawResult.text) {
-                        const rawStr = typeof rawResult === "string" ? rawResult : (rawResult.data || rawResult.text || JSON.stringify(rawResult));
-                        const jsonMatch = rawStr.match(/\{[\s\S]*\}/);
-                        if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
-                    }
-
-                    if (parsed && typeof parsed === 'object') {
+                    const parsed = parseAnalysisPayload(rawResult);
+                    if (parsed) {
                         analysisMap[videoId] = parsed;
                     }
+                } catch {
+                    // ignore individual failures
                 }
-            } catch (e) {
-                // Silently ignore individual fetch failures to not crash the Promise.all
-            }
-        }));
+            })
+        );
 
         return NextResponse.json(analysisMap, { status: 200 });
     } catch (error) {
-        console.error('Failed to list blobs:', error);
+        console.error('Failed to list or fetch analyses:', error);
         return NextResponse.json({ error: 'Failed to fetch analyses' }, { status: 500 });
     }
 }

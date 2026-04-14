@@ -1,5 +1,7 @@
-import { list, put } from "@vercel/blob";
+import { put } from "@vercel/blob";
 import { NextResponse } from "next/server";
+import { listAllBlobs } from "../../lib/blobList";
+import { getIndexId, getTwelveLabsClient } from "../../lib/twelvelabs";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -50,9 +52,12 @@ export async function GET(request) {
 
   // ── 1. Check cache ────────────────────────────────────────
   try {
-    const { blobs } = await list({ prefix: cacheKey });
+    const blobs = await listAllBlobs(cacheKey);
     if (blobs.length > 0) {
-      const res = await fetch(blobs[0].url);
+      const best = blobs.reduce((a, b) =>
+        new Date(a.uploadedAt).getTime() > new Date(b.uploadedAt).getTime() ? a : b
+      );
+      const res = await fetch(best.url);
       if (res.ok) {
         const data = await res.json();
         if (data?.segments && Object.keys(data.segments).length > 0) {
@@ -69,7 +74,7 @@ export async function GET(request) {
   let clipEmbeddings = null; // [{ startOffsetSec, endOffsetSec, vector }]
 
   try {
-    const { blobs: videoBlobs } = await list({ prefix: "api_video_cache_v2_" });
+    const videoBlobs = await listAllBlobs("api_video_cache_v3_");
 
     for (const blob of videoBlobs) {
       try {
@@ -93,11 +98,36 @@ export async function GET(request) {
   }
 
   if (!clipEmbeddings) {
-    console.warn(`[embeddings] No embedding data found for ${videoId}. Refresh /api/videos to populate.`);
-    return NextResponse.json({
-      segments: {},
-      message: "No embedding data cached. Refresh /api/videos to populate embeddings.",
-    });
+    // Metadata-only /api/videos responses intentionally omit embeddings.
+    // Fall back to a direct single-video fetch so detail pages can still load vectors on demand.
+    const client = getTwelveLabsClient();
+    const candidateIndexes = ["tl-context-engine-videos", "tl-context-engine-ads"];
+
+    for (const indexName of candidateIndexes) {
+      try {
+        const indexId = await getIndexId(indexName);
+        const videoData = await client.indexes.videos.retrieve(indexId, videoId, {
+          embeddingOption: ["visual", "audio", "transcription"],
+        });
+        const segments = videoData?.embedding?.videoEmbedding?.segments || [];
+        if (segments.length > 0) {
+          clipEmbeddings = segments.map((seg) => ({
+            startOffsetSec: seg.startOffsetSec,
+            endOffsetSec: seg.endOffsetSec,
+            vector: seg.float,
+          }));
+          console.log(`[embeddings] Direct fetch recovered ${clipEmbeddings.length} clip embeddings for ${videoId}`);
+          break;
+        }
+      } catch {
+        // Ignore index misses and try next index.
+      }
+    }
+  }
+
+  if (!clipEmbeddings) {
+    console.warn(`[embeddings] No embedding data found for ${videoId}.`);
+    return NextResponse.json({ segments: {}, message: "No embedding data available for this video." });
   }
 
   // ── 3. Load scene segment plan ───────────────────────────
@@ -105,9 +135,12 @@ export async function GET(request) {
 
   try {
     const planKey = `ad_plan_timeline_v1_${videoId}.json`;
-    const { blobs: planBlobs } = await list({ prefix: planKey });
+    const planBlobs = await listAllBlobs(planKey);
     if (planBlobs.length > 0) {
-      const res = await fetch(planBlobs[0].url);
+      const bestPlan = planBlobs.reduce((a, b) =>
+        new Date(a.uploadedAt).getTime() > new Date(b.uploadedAt).getTime() ? a : b
+      );
+      const res = await fetch(bestPlan.url);
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data?.segments) && data.segments.length > 0) {

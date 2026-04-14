@@ -437,6 +437,57 @@ const SENTIMENT_TONE_MATRIX: Record<string, Record<string, number>> = {
   },
 };
 
+/**
+ * When segment brand_safety is mostly "safe / Low", GARM-based safetyMode branches never diverge.
+ * This factor always uses interruption risk + sentiment + tone so strict / balanced / revenue_max
+ * produce visibly different break rankings and counts.
+ */
+function placementModeBreakFactor(
+  safetyMode: PlacementConfig["safetyMode"],
+  segment: Segment
+): number {
+  const ir = segment.ad_break_fitness?.interruption_risk ?? 0.5;
+  const sent = segment.sentiment;
+  const tenseTone =
+    segment.tone === "Tense" ||
+    segment.tone === "Somber" ||
+    segment.tone === "Dramatic";
+
+  if (safetyMode === "strict") {
+    let f = 1 - 0.28 * Math.max(0, ir - 0.32);
+    if (sent === "Negative") f *= 0.86;
+    else if (sent === "Mixed") f *= 0.92;
+    if (tenseTone) f *= 0.9;
+    return Math.max(0.32, f);
+  }
+  if (safetyMode === "balanced") {
+    let f = 1 - 0.12 * Math.max(0, ir - 0.48);
+    if (sent === "Negative") f *= 0.94;
+    if (tenseTone) f *= 0.96;
+    return Math.max(0.52, f);
+  }
+  let f = 1 + 0.14 * Math.max(0, 0.62 - ir);
+  if (sent === "Positive") f *= 1.05;
+  return Math.min(1.2, f);
+}
+
+/** Per-mode scaling of ad×scene scores (eligible rows only). */
+function placementModeAdRankFactor(
+  safetyMode: PlacementConfig["safetyMode"],
+  segment: Segment
+): number {
+  const ir = segment.ad_break_fitness?.interruption_risk ?? 0.5;
+  if (safetyMode === "strict") {
+    let f = Math.max(0.5, 1 - 0.22 * Math.max(0, ir - 0.4));
+    if (segment.sentiment === "Negative" || segment.sentiment === "Mixed") f *= 0.88;
+    return f;
+  }
+  if (safetyMode === "balanced") {
+    return Math.max(0.72, 1 - 0.1 * Math.max(0, ir - 0.52));
+  }
+  return Math.min(1.14, 1 + 0.08 * Math.max(0, 0.58 - ir));
+}
+
 /* ══════════════════════════════════════════════════════════════
    Function 1: identifyAdBreaks
    ══════════════════════════════════════════════════════════════ */
@@ -492,7 +543,7 @@ export function identifyAdBreaks(
       if (riskLevel === "High") safetyMultiplier = 0.0;
       else if (riskLevel === "Medium") safetyMultiplier = 0.5;
     }
-    // revenue_max: always 1.0
+    // revenue_max: GARM multiplier stays 1.0 (placementModeBreakFactor still applies below)
 
     // ── Composite ────────────────────────────────────────
 
@@ -502,8 +553,10 @@ export function identifyAdBreaks(
       valleyBonus * 0.2 +
       transitionBonus * 0.2;
 
+    const placementModeFactor = placementModeBreakFactor(safetyMode, segment);
+
     const finalScore =
-      Math.round(rawScore * safetyMultiplier * 1000) / 1000;
+      Math.round(rawScore * safetyMultiplier * placementModeFactor * 1000) / 1000;
 
     if (finalScore <= 0) continue;
 
@@ -517,6 +570,7 @@ export function identifyAdBreaks(
       breakType: segment.ad_break_fitness?.break_type ?? "None",
       transitionBonus,
       safetyMultiplier,
+      placementModeFactor,
       rawScore,
       finalScore,
     };
@@ -644,7 +698,7 @@ export function rankAdsForBreak(
       }
     }
 
-    // Gate D: Safety mode blanket gate
+    // Gate D: strict only blocks explicitly unsafe segments (same as before; modes mainly differ via score factors)
     if (!isDisqualified) {
       if (config.safetyMode === "strict" && !isBrandSafe) {
         isDisqualified = true;
@@ -695,8 +749,10 @@ export function rankAdsForBreak(
       // so ads in the same category will score differently.
       sceneFitResult = computeSceneFit(ad, segment);
 
-      // totalScore = adAffinity × sceneFit
-      totalScore = Math.round(adAffinity * sceneFitResult.score * 1000) / 1000;
+      // totalScore = adAffinity × sceneFit × placement mode (strict dampens edgy breaks; revenue_max lifts clean ones)
+      const modeRank = placementModeAdRankFactor(config.safetyMode, segment);
+      totalScore =
+        Math.round(adAffinity * sceneFitResult.score * modeRank * 1000) / 1000;
 
       scores = {
         adAffinity: Math.round(adAffinity * 1000) / 1000,

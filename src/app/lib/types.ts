@@ -25,6 +25,25 @@ export interface AdSuitability {
   confidence: number;
 }
 
+// ── IAB Taxonomy (for standards-compatible ad requests) ─────
+
+export interface IabTaxonomyItem {
+  /** Tier-1 IAB category label (broad). */
+  tier1: string;
+  /** Tier-2 IAB category label (subcategory). */
+  tier2: string;
+  /** IAB taxonomy code when available (e.g. "IAB1-5"). */
+  code: string;
+  /** Model confidence score in [0, 1]. */
+  confidence: number;
+}
+
+export interface IabTaxonomySummary {
+  iab: IabTaxonomyItem[];
+  iabTopTier1: string[];
+  iabTopTier2: string[];
+}
+
 // ── Ad Break Fitness ─────────────────────────────────────────
 
 export interface AdBreakFitness {
@@ -146,7 +165,7 @@ export const MOCK_USERS: MockUser[] = [
   {
     id: "nathan",
     name: "Nathan",
-    demographics: ["Male", "19", "College Student", "Low-Income", "HHI $0K+"],
+    demographics: ["Male", "24", "College Student", "Urban", "HHI $45K+"],
     interest_signals: [
       "Gaming", "Video Games", "Esports", "Fast Food", "QSR",
       "Music", "Concerts", "Entertainment", "Movies",
@@ -160,8 +179,8 @@ export const MOCK_USERS: MockUser[] = [
       retail_general: 0.65,
       entertainment: 0.80,
       fitness_wellness: 0.30,
-      automotive_truck: 0.15,
-      financial_services: 0.10,
+      automotive_truck: 0.55,
+      financial_services: 0.50,
     },
     content_preferences: ["Action", "Comedy", "Anime", "Sports", "Gaming"],
     exclusion_categories: [
@@ -252,6 +271,8 @@ export interface AdBreakReasoning {
   breakType: string;
   transitionBonus: number;
   safetyMultiplier: number;
+  /** strict / balanced / revenue_max adjustment (uses sentiment, tone, interruption when GARM is flat) */
+  placementModeFactor: number;
   rawScore: number;
   finalScore: number;
 }

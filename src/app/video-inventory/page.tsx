@@ -54,7 +54,19 @@ export default function VideoInventoryPage() {
     const [isSearching, setIsSearching] = useState(false);
 
     // Fetch Videos for the generic inventory index
-    const { videos: allVideos, loading: videosLoading, refresh: refreshVideos } = useVideos("tl-context-engine-videos");
+    const { videos: allVideos, loading: videosLoading, refresh: refreshVideos } = useVideos("tl-context-engine-videos", { includeEmbeddings: false });
+
+    const hiddenVideoIDs = [
+        "69ba18582fc4a03916fd0cd5",
+        "69ba18b7ff6d03487ddab3ef",
+        "69ba190b3571b38304a680b0",
+        "69ba19712fc4a03916fd0d7b",
+        "69ba19ddbd3198ff9f5ae83b"
+    ]
+
+    // Split ready vs. still-indexing videos
+    const readyVideos = allVideos.filter((v) => !v.processing && !hiddenVideoIDs.includes(v.id));
+    const processingVideos = allVideos.filter((v) => v.processing);
 
     // Debounced semantic search via TwelveLabs /api/search
     useEffect(() => {
@@ -101,10 +113,10 @@ export default function VideoInventoryPage() {
     const filteredVideos = useMemo(() => {
         if (searchQuery.trim() && searchResults) {
             const matchedIds = new Set(searchResults.map((r) => r.videoId));
-            return allVideos.filter((v) => matchedIds.has(v.id) || matchedIds.has(v.hls?.videoUrl ?? ""));
+            return readyVideos.filter((v) => matchedIds.has(v.id) || matchedIds.has(v.hls?.videoUrl ?? ""));
         }
-        return allVideos;
-    }, [allVideos, searchQuery, searchResults]);
+        return readyVideos;
+    }, [readyVideos, searchQuery, searchResults]);
 
     return (
         <div className="min-h-screen bg-white">
@@ -258,7 +270,57 @@ export default function VideoInventoryPage() {
 
             {/* ── Content Grid ─────────────────────────────────── */}
             <main className="px-8 pb-12">
-                {/* Search status bar */}
+                {/* ── Currently Indexing Banner ──────────────────────── */}
+            {processingVideos.length > 0 && (
+                <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4">
+                    <div className="flex items-center gap-2.5 mb-3">
+                        {/* Pulsing dot */}
+                        <span className="relative flex h-2.5 w-2.5 shrink-0">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+                            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500" />
+                        </span>
+                        <p className="text-sm font-semibold text-amber-800">
+                            {processingVideos.length} video{processingVideos.length !== 1 ? 's' : ''} currently indexing in TwelveLabs
+                        </p>
+                        <span className="ml-auto text-[11px] text-amber-600 font-medium">Will appear automatically once ready</span>
+                    </div>
+
+                    <div className="flex gap-3 flex-wrap">
+                        {processingVideos.map((video) => {
+                            const filename = video.systemMetadata?.filename || 'Untitled';
+                            const displayName = filename.replace(/\.[^.]+$/, '');
+                            const thumb = video.hls?.thumbnailUrls?.[0];
+                            return (
+                                <div key={video.id} className="relative w-32 rounded-xl overflow-hidden border border-amber-200 bg-amber-100 shrink-0 group">
+                                    {/* Thumbnail or placeholder */}
+                                    <div className="aspect-video relative">
+                                        {thumb ? (
+                                            <img src={thumb} alt={displayName} className="w-full h-full object-cover" />
+                                        ) : (
+                                            <div className="w-full h-full flex items-center justify-center bg-amber-200/60">
+                                                <svg viewBox="0 0 24 24" fill="none" className="w-6 h-6 text-amber-500">
+                                                    <rect x="2" y="4" width="20" height="16" rx="3" stroke="currentColor" strokeWidth="1.5" />
+                                                    <path d="M10 9.5L15 12L10 14.5V9.5Z" fill="currentColor" />
+                                                </svg>
+                                            </div>
+                                        )}
+                                        {/* Spinner overlay */}
+                                        <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
+                                            <svg className="w-5 h-5 text-white animate-spin" viewBox="0 0 24 24" fill="none">
+                                                <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" strokeDasharray="28 8" />
+                                            </svg>
+                                        </div>
+                                    </div>
+                                    {/* Filename */}
+                                    <p className="px-2 py-1.5 text-[10px] font-medium text-amber-800 truncate">{displayName}</p>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
+
+            {/* Search status bar */}
                 {searchQuery && (
                     <div className="mb-4 flex items-center gap-3">
                         {isSearching ? (
@@ -291,7 +353,7 @@ export default function VideoInventoryPage() {
                             <div className="w-2 h-2 rounded-full bg-text-tertiary animate-bounce" style={{ animationDelay: '300ms' }}></div>
                         </div>
                     </div>
-                ) : allVideos.length === 0 ? (
+                ) : readyVideos.length === 0 && processingVideos.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-24 text-center">
                         <div className="relative w-24 h-24 mb-6 grayscale opacity-20 hover:grayscale-0 hover:opacity-100 transition-all duration-500 cursor-pointer">
                             <svg viewBox="0 0 460 300" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full drop-shadow-lg">

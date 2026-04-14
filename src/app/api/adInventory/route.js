@@ -1,7 +1,10 @@
-import { list } from "@vercel/blob";
 import { NextResponse } from "next/server";
+import { listAllBlobs } from "../../lib/blobList";
 
 export const dynamic = "force-dynamic";
+
+/** Matches analysis_v4_<videoId>_<contractHash>.json */
+const V4_VIDEO_ID_RE = /^analysis_v4_([^_]+)_/;
 
 const SLUG_TO_CATEGORY_KEY = {
   "premium-spirits": "alcohol_premium",
@@ -99,8 +102,8 @@ function parseAnalysis(raw) {
 export async function GET() {
   try {
     // 1. Fetch cached video list for the ads index
-    const videoCachePrefix = "api_video_cache_v2_";
-    const { blobs: videoBlobs } = await list({ prefix: videoCachePrefix });
+    const videoCachePrefix = "api_video_cache_v3_";
+    const videoBlobs = await listAllBlobs(videoCachePrefix);
 
     let allVideos = [];
     for (const blob of videoBlobs) {
@@ -123,15 +126,28 @@ export async function GET() {
       }
     });
 
-    // 2. Fetch all cached analyses
-    const { blobs: analysisBlobs } = await list({ prefix: "analysis_v3_" });
-    const analysisMap = {};
+    // 2. Newest analysis_v4 blob per videoId (same rule as /api/analyses, IAB export)
+    const analysisBlobs = await listAllBlobs("analysis_v4_");
+    const analysesByVideoId = new Map();
+    for (const blob of analysisBlobs) {
+      const match = blob.pathname.match(V4_VIDEO_ID_RE);
+      const videoId = match?.[1];
+      if (!videoId) continue;
+      const prior = analysesByVideoId.get(videoId);
+      if (
+        !prior ||
+        new Date(blob.uploadedAt).getTime() > new Date(prior.uploadedAt).getTime()
+      ) {
+        analysesByVideoId.set(videoId, blob);
+      }
+    }
 
+    const analysisMap = {};
     await Promise.all(
-      analysisBlobs.map(async (blob) => {
-        const videoId = blob.pathname
-          .replace("analysis_v3_", "")
-          .replace(".json", "");
+      [...analysesByVideoId.values()].map(async (blob) => {
+        const match = blob.pathname.match(V4_VIDEO_ID_RE);
+        const videoId = match?.[1];
+        if (!videoId) return;
         try {
           const res = await fetch(blob.url);
           if (res.ok) {

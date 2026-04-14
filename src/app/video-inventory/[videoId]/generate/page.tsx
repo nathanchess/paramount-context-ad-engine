@@ -61,7 +61,7 @@ export default function GeneratedVideoPreviewPage() {
     };
   }, [searchParams]);
 
-  const { videos, loading: videosLoading } = useVideos("tl-context-engine-videos");
+  const { videos, loading: videosLoading } = useVideos("tl-context-engine-videos", { includeEmbeddings: false });
   const video = useMemo(() => videos.find((v) => v.id === videoId) || null, [videos, videoId]);
   const hlsUrl = video?.hls?.videoUrl ?? null;
 
@@ -100,25 +100,31 @@ export default function GeneratedVideoPreviewPage() {
       setDataLoading(true);
       setDataError(null);
       try {
-        const [timelineRes, inventoryRes, vectorsRes] = await Promise.all([
+        const [timelineRes, inventoryRes] = await Promise.all([
           fetch("/api/generateAdPlan", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ videoId }),
           }),
           fetch("/api/adInventory"),
-          fetch(`/api/embeddings?videoId=${videoId}`),
         ]);
         if (!timelineRes.ok) throw new Error("Failed to load timeline");
         if (!inventoryRes.ok) throw new Error("Failed to load ad inventory");
         const timelineData = await timelineRes.json();
         const invData = await inventoryRes.json();
-        const vectorsData = vectorsRes.ok ? await vectorsRes.json() : { segments: {} };
+        const inventory = Array.isArray(invData) ? invData : [];
         if (!mounted) return;
         setSegments(Array.isArray(timelineData?.segments) ? timelineData.segments : []);
         setCast(Array.isArray(timelineData?.cast) ? timelineData.cast : []);
-        setAdInventory(Array.isArray(invData) ? invData : []);
-        setSegmentVectors(vectorsData?.segments || {});
+        setAdInventory(inventory);
+
+        if (inventory.length > 0) {
+          const vectorsRes = await fetch(`/api/embeddings?videoId=${videoId}`);
+          const vectorsData = vectorsRes.ok ? await vectorsRes.json() : { segments: {} };
+          if (mounted) setSegmentVectors(vectorsData?.segments || {});
+        } else {
+          setSegmentVectors({});
+        }
       } catch (e) {
         if (mounted) setDataError(e instanceof Error ? e.message : "Failed to load preview");
       } finally {
@@ -640,8 +646,8 @@ export default function GeneratedVideoPreviewPage() {
         <div className="rounded-xl border border-border-light p-4">
           <p className="text-[11px] font-semibold uppercase tracking-[1.5px] text-text-tertiary mb-2">Cast</p>
           <div className="flex flex-wrap gap-1.5">
-            {cast.map((c) => (
-              <span key={c.name} className="px-2 py-1 rounded-full bg-gray-50 border border-border-light text-[11px] text-text-secondary">{c.name}</span>
+            {cast.map((c, i) => (
+              <span key={`${i}-${c.name}`} className="px-2 py-1 rounded-full bg-gray-50 border border-border-light text-[11px] text-text-secondary">{c.name}</span>
             ))}
           </div>
         </div>

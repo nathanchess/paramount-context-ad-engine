@@ -1,21 +1,23 @@
 import { TwelveLabs } from "twelvelabs-js";
 import { NextResponse } from "next/server";
-import { list, put } from "@vercel/blob";
+import { put } from "@vercel/blob";
+import { listAllBlobs } from "../../lib/blobList";
 
 export const maxDuration = 120;
 
 
 const summary_prompt = `
-You are helping a CTV ad-ops team understand a single ad video.
+You are helping a CTV ad-ops team understand a single TV video from a show likely aired on a premium CTV platform.
 
 Analyze the video and return ONLY a JSON object with these exact keys:
 
-- "summary": 2-3 sentence description of what the ad shows and its message.
-- "proposedTitle": a concise, human-friendly title for the ad.
+- "summary": 2-3 sentence description of what the video shows and its message.
+- "proposedTitle": a concise, human-friendly title for the video.
 - "targetAudience": array of 3-6 strings capturing audience affinities (e.g., "Health-Conscious", "Gen-Z", "Luxury Seekers").
-- "tags": array of 5-10 short content or context tags that describe the ad (visuals, themes, mood). Use lowercase, space-separated tags (e.g., "beach sunset", "family dinner").
+- "tags": array of 5-10 short content or context tags that describe the video (visuals, themes, mood). Use lowercase, space-separated tags (e.g., "beach sunset", "family dinner").
 
 Do not include any extra commentary or markdown. Return valid JSON only.`;
+
 
 function parseAnalyzeResult(raw) {
     if (!raw) return null;
@@ -52,11 +54,14 @@ export async function POST(request) {
 
   try {
     const blobName = `video_summary_v2_${videoId}.json`;
-    const { blobs } = await list({ prefix: blobName });
+    const blobs = await listAllBlobs(blobName);
 
     if (blobs.length > 0) {
       console.log(`[DEBUG] Found cached video summary for ${videoId} in Vercel Blob`);
-      const cachedRes = await fetch(blobs[0].url);
+      const best = blobs.reduce((a, b) =>
+        new Date(a.uploadedAt).getTime() > new Date(b.uploadedAt).getTime() ? a : b
+      );
+      const cachedRes = await fetch(best.url);
       if (cachedRes.ok) {
         const cachedData = await cachedRes.json();
         return NextResponse.json(cachedData, { status: 200 });

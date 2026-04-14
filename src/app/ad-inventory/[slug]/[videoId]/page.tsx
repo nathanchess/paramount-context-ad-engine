@@ -7,6 +7,9 @@ import Hls from "hls.js";
 import { hlsClientConfig } from "../../../lib/hlsClientConfig";
 import { getCategoryBySlug, type AdCategory } from "../../../lib/adInventoryStore";
 import { useVideos, type CachedVideo } from "../../../lib/videoCache";
+import type { IabTaxonomyItem } from "../../../lib/types";
+import { normalizeIabWithPolicy, formatIabTableForPrompt } from "../../../lib/iabTaxonomy";
+import { buildOpenRtbMappedView } from "../../../lib/openRtbMapping";
 import { X, Clock, FileText, Database, Download, Cpu, Users, UserX } from "lucide-react";
 
 /* ── Types ──────────────────────────────────────────────── */
@@ -35,6 +38,14 @@ interface AnalysisData {
     negativeDemographics: string[];
     targetAudience: TargetAudienceData | string;
     timelineMarkers: TimelineMarker[];
+    iab: IabTaxonomyItem[];
+    iabTopTier1: string[];
+    iabTopTier2: string[];
+    iabCodes: string[];
+    iabConfidence: string;
+    iabFallbackApplied: boolean;
+    iabFallbackReason: string | null;
+    iabRawCandidates: IabTaxonomyItem[];
 }
 
 interface MockUser {
@@ -115,7 +126,7 @@ interface MockUser {
     {
       id: "nathan",
       name: "Nathan",
-      demographics: ["Male", "19", "College Student", "Low-Income", "HHI $0K+"],
+      demographics: ["Male", "24", "College Student", "Urban", "HHI $45K+"],
       interest_signals: [
         "Gaming", "Video Games", "Esports", "Fast Food", "QSR",
         "Music", "Concerts", "Entertainment", "Movies",
@@ -129,8 +140,8 @@ interface MockUser {
         retail_general: 0.65,
         entertainment: 0.80,
         fitness_wellness: 0.30,
-        automotive_truck: 0.15,
-        financial_services: 0.10,
+        automotive_truck: 0.55,
+        financial_services: 0.50,
       },
       content_preferences: ["Action", "Comedy", "Anime", "Sports", "Gaming"],
       exclusion_categories: [
@@ -201,6 +212,16 @@ function toSnakeCaseTag(input: string): string {
         .replace(/[^a-z0-9]+/g, "_")
         .replace(/^_+|_+$/g, "")
         .replace(/_+/g, "_");
+}
+
+function getCategoryKeyFromSlug(slug: string): string {
+    const slugToCategoryKey: Record<string, string> = {
+        "premium-spirits": "alcohol_premium",
+        "automotive-truck": "automotive_truck",
+        "cpg-snacks": "cpg_snacks",
+        "financial-services": "financial_services",
+    };
+    return slugToCategoryKey[slug] ?? toSnakeCaseTag(slug);
 }
 
 function deriveCategoryCohortTags(categoryKey: string): string[] {
@@ -276,6 +297,51 @@ function deriveVideoCohortTags(summary: string, contexts: string[]): string[] {
     return Array.from(new Set(derived));
 }
 
+function normalizeIabItems(input: unknown): IabTaxonomyItem[] {
+    if (!Array.isArray(input)) return [];
+    return input
+        .map((item) => {
+            if (!item || typeof item !== "object") return null;
+            const record = item as Record<string, unknown>;
+            const tier1 = typeof record.tier1 === "string" ? record.tier1.trim() : "";
+            const tier2 = typeof record.tier2 === "string" ? record.tier2.trim() : "";
+            const code = typeof record.code === "string" ? record.code.trim() : "";
+            const confidence = typeof record.confidence === "number"
+                ? Math.max(0, Math.min(1, record.confidence))
+                : 0;
+            if (!tier1 || !tier2) return null;
+            return { tier1, tier2, code, confidence };
+        })
+        .filter((v): v is IabTaxonomyItem => Boolean(v));
+}
+
+function normalizeAnalysis(raw: unknown, categoryKey: string): AnalysisData {
+    const parsed = (raw && typeof raw === "object") ? (raw as Record<string, unknown>) : {};
+    const rawIab = normalizeIabItems(parsed.iab);
+    const policy = normalizeIabWithPolicy(rawIab, categoryKey);
+
+    return {
+        summary: typeof parsed.summary === "string" ? parsed.summary : "",
+        company: typeof parsed.company === "string" ? parsed.company : "Unknown",
+        proposedTitle: typeof parsed.proposedTitle === "string" ? parsed.proposedTitle : "Ad Video",
+        recommendedContexts: Array.isArray(parsed.recommendedContexts) ? parsed.recommendedContexts.filter((x): x is string => typeof x === "string") : [],
+        negativeCampaignContexts: Array.isArray(parsed.negativeCampaignContexts) ? parsed.negativeCampaignContexts.filter((x): x is string => typeof x === "string") : [],
+        brandSafetyGARM: Array.isArray(parsed.brandSafetyGARM) ? parsed.brandSafetyGARM.filter((x): x is string => typeof x === "string") : [],
+        targetDemographics: Array.isArray(parsed.targetDemographics) ? parsed.targetDemographics.filter((x): x is string => typeof x === "string") : [],
+        negativeDemographics: Array.isArray(parsed.negativeDemographics) ? parsed.negativeDemographics.filter((x): x is string => typeof x === "string") : [],
+        targetAudience: (typeof parsed.targetAudience === "string" || typeof parsed.targetAudience === "object") ? (parsed.targetAudience as TargetAudienceData | string) : "",
+        timelineMarkers: Array.isArray(parsed.timelineMarkers) ? (parsed.timelineMarkers as TimelineMarker[]) : [],
+        iab: policy.normalizedItems,
+        iabTopTier1: policy.effectiveTier1,
+        iabTopTier2: policy.effectiveTier2,
+        iabCodes: policy.effectiveCodes,
+        iabConfidence: policy.averageConfidence.toFixed(3),
+        iabFallbackApplied: policy.fallbackApplied,
+        iabFallbackReason: policy.fallbackReason,
+        iabRawCandidates: rawIab,
+    };
+}
+
 /* ── Skeleton ───────────────────────────────────────────── */
 function Skeleton({ className = "" }: { className?: string }) {
     return <div className={`animate-pulse bg-gray-100 rounded-lg ${className}`} />;
@@ -310,6 +376,8 @@ export default function AdVideoDetailPage() {
     const [selectedUserId, setSelectedUserId] = useState<string>("ethan");
     const [affinityResult, setAffinityResult] = useState<AffinityResult | null>(null);
     const [affinityLoading, setAffinityLoading] = useState(false);
+    const [openRtbExpanded, setOpenRtbExpanded] = useState(false);
+    const [showOpenRtbExportModal, setShowOpenRtbExportModal] = useState(false);
 
     // Use cached videos (instant load from localStorage)
     const { videos: allVideos, loading } = useVideos();
@@ -322,10 +390,14 @@ export default function AdVideoDetailPage() {
     // Call analyze API once video is loaded
     const runAnalysis = useCallback(async () => {
         if (!video) return;
+        const categoryKey = getCategoryKeyFromSlug(slug);
 
         setAnalysisLoading(true);
         try {
-            const meta = parseUserMeta(video.userMetadata);
+            const invCategory = getCategoryBySlug(slug);
+            const categoryLabel = invCategory?.category || slug.replace(/-/g, " ");
+            const iabBlock = formatIabTableForPrompt(categoryKey, categoryLabel);
+
             const prompt = `Analyze this ad video. Return a JSON object with these exact keys:
 - "summary": 2-3 sentence description of what the ad shows and its message
 - "company": the brand or company featured in this ad
@@ -337,6 +409,11 @@ export default function AdVideoDetailPage() {
 - "negativeDemographics": array of 1-3 strings describing demographics who should NOT see this ad (e.g., "Teenagers", "Underage").
 - "targetAudience": Object with 3 string arrays: "highPriority" (2-3 items), "mediumPriority" (1-2 items), and "lowPriority" (1-2 items). These are target audience affinities (e.g., Luxury, Spirits, Gen-Z).
 - "timelineMarkers": array of 3-6 objects with { "timestampSec": number, "label": short label, "reasoning": why this moment is relevant for ad targeting }
+- "iab": array of 2-6 objects. Each object MUST be one of the allowed rows below (identical "tier1", "tier2", and "code" strings). Include "confidence": number from 0 to 1 per row. Never use IAB codes or tier labels that are not in the allowed list.
+- "iabTopTier1": array of top 1-3 tier1 labels copied from your chosen iab rows (must match those rows exactly)
+- "iabTopTier2": array of top 2-5 tier2 labels copied from your chosen iab rows (must match those rows exactly)
+
+${iabBlock}
 
 Return ONLY valid JSON, no markdown fences.`;
 
@@ -351,7 +428,7 @@ Return ONLY valid JSON, no markdown fences.`;
             const jsonMatch = raw.match(/\{[\s\S]*\}/);
             if (jsonMatch) {
                 const parsed = JSON.parse(jsonMatch[0]);
-                setAnalysis(parsed);
+                setAnalysis(normalizeAnalysis(parsed, categoryKey));
             } else {
                 throw new Error("Could not parse");
             }
@@ -364,10 +441,18 @@ Return ONLY valid JSON, no markdown fences.`;
                 targetDemographics: [], negativeDemographics: [],
                 targetAudience: { highPriority: [], mediumPriority: [], lowPriority: [] },
                 timelineMarkers: [],
+                iab: [],
+                iabTopTier1: [],
+                iabTopTier2: [],
+                iabCodes: [],
+                iabConfidence: "0.000",
+                iabFallbackApplied: true,
+                iabFallbackReason: "Analysis failed; no model output available.",
+                iabRawCandidates: [],
             });
         }
         setAnalysisLoading(false);
-    }, [video]);
+    }, [video, slug]);
 
     useEffect(() => { if (video) runAnalysis(); }, [video, runAnalysis]);
 
@@ -379,13 +464,7 @@ Return ONLY valid JSON, no markdown fences.`;
             try {
                 const userCohort = mockUsers.find(u => u.id === selectedUserId);
 
-                const slugToCategoryKey: Record<string, string> = {
-                    "premium-spirits": "alcohol_premium",
-                    "automotive-truck": "automotive_truck",
-                    "cpg-snacks": "cpg_snacks",
-                    "financial-services": "financial_services",
-                };
-                const category_key = slugToCategoryKey[slug] ?? toSnakeCaseTag(slug);
+                const category_key = getCategoryKeyFromSlug(slug);
 
                 const targetAudience = analysis.targetAudience;
                 const targetAudienceTags = Array.from(new Set(
@@ -581,8 +660,45 @@ Return ONLY valid JSON, no markdown fences.`;
             vw_garm_floor: "strict",
             vw_duration: String(Math.round(duration)),
             vw_ad_title: analysis.proposedTitle || "untitled",
+            vw_iab_t1: (analysis.iabTopTier1 || []).join(","),
+            vw_iab_t2: (analysis.iabTopTier2 || []).join(","),
+            vw_iab_codes: (analysis.iabCodes || []).join(","),
+            vw_iab_conf: analysis.iabConfidence || "0.000",
         },
     } : null;
+
+    const openRtbPayload = (analysis && freewheelPayload)
+        ? buildOpenRtbMappedView({
+            freewheelPayload,
+            categorySlug: slug,
+            contentTitle: analysis.proposedTitle || filename.replace(/\.[^.]+$/, ""),
+            fallbackApplied: analysis.iabFallbackApplied,
+            fallbackReason: analysis.iabFallbackReason,
+        })
+        : null;
+
+    useEffect(() => {
+        if (!showOpenRtbExportModal) return;
+        function onKey(e: KeyboardEvent) {
+            if (e.key === "Escape") setShowOpenRtbExportModal(false);
+        }
+        document.addEventListener("keydown", onKey);
+        return () => document.removeEventListener("keydown", onKey);
+    }, [showOpenRtbExportModal]);
+
+    function downloadOpenRtbJson() {
+        if (!openRtbPayload) return;
+        const blob = new Blob([JSON.stringify(openRtbPayload, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `openrtb-mapped-${slug}-${videoId}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        setShowOpenRtbExportModal(false);
+    }
 
     if (loading) return <div className="min-h-screen bg-white" />;
 
@@ -1136,27 +1252,124 @@ Return ONLY valid JSON, no markdown fences.`;
 
                 {/* Freewheel Payload Inspector */}
                 <div>
-                    <h2 className="text-sm font-semibold text-text-primary mb-1">Freewheel / Ad Server Config</h2>
-                    <p className="text-xs text-text-tertiary mb-4">Auto-generated programmatic payload. These KVPs are sent to the SSP so it knows exactly when to bid.</p>
-                    {analysisLoading ? <Skeleton className="h-48 w-full" /> : (
-                        <div className="rounded-2xl overflow-hidden border border-gray-800">
-                            <div className="bg-[#1e1e2e] px-4 py-2.5 flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                    <div className="flex items-center gap-1.5">
-                                        <div className="w-2.5 h-2.5 rounded-full bg-red-400/80" />
-                                        <div className="w-2.5 h-2.5 rounded-full bg-yellow-400/80" />
-                                        <div className="w-2.5 h-2.5 rounded-full bg-green-400/80" />
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between mb-4">
+                        <div className="min-w-0">
+                            <h2 className="text-sm font-semibold text-text-primary mb-1">Freewheel / Ad Server Config</h2>
+                            <p className="text-xs text-text-tertiary">Auto-generated programmatic payload. These KVPs are sent to the SSP so it knows exactly when to bid.</p>
+                        </div>
+                        {!analysisLoading && openRtbPayload && (
+                            <button
+                                type="button"
+                                onClick={() => setShowOpenRtbExportModal(true)}
+                                className="shrink-0 inline-flex items-center justify-center gap-1.5 px-4 py-2 bg-text-primary text-white rounded-lg font-medium text-sm transition-all duration-200 shadow-sm hover:shadow-md hover:bg-black hover:rounded-2xl w-full sm:w-auto"
+                            >
+                                <Download className="w-4 h-4 shrink-0" aria-hidden />
+                                Export OpenRTB
+                            </button>
+                        )}
+                    </div>
+                    {!analysisLoading && (
+                        <div className="mb-4 rounded-xl border border-border-light p-4 bg-gray-50/50 space-y-4">
+                            <div>
+                                <h3 className="text-xs font-semibold uppercase tracking-[1.5px] text-text-secondary mb-2">IAB Taxonomy (Normalized)</h3>
+                                {analysis?.iab?.length ? (
+                                    <div className="space-y-3">
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {(analysis.iabTopTier1 || []).map((tier1) => (
+                                                <span key={tier1} className="px-2.5 py-1 rounded-full bg-indigo-50 text-[11px] font-medium text-indigo-700 border border-indigo-200">
+                                                    {tier1}
+                                                </span>
+                                            ))}
+                                        </div>
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {(analysis.iabTopTier2 || []).map((tier2) => (
+                                                <span key={tier2} className="px-2.5 py-1 rounded-full bg-white text-[11px] font-medium text-text-secondary border border-border-light">
+                                                    {tier2}
+                                                </span>
+                                            ))}
+                                        </div>
+                                        <p className="text-[11px] text-text-tertiary">
+                                            Mean confidence: <span className="font-semibold text-text-secondary">{analysis.iabConfidence}</span>
+                                        </p>
                                     </div>
-                                    <span className="text-[11px] text-gray-400 ml-2 font-mono">freewheel_payload.json</span>
-                                </div>
-                                <button onClick={() => { navigator.clipboard.writeText(JSON.stringify(freewheelPayload, null, 2)); }} className="text-[10px] text-gray-500 hover:text-gray-300 transition-colors flex items-center gap-1">
-                                    <svg viewBox="0 0 12 12" fill="none" className="w-3 h-3"><rect x="3" y="3" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1" /><path d="M2 9V2.5A.5.5 0 012.5 2H9" stroke="currentColor" strokeWidth="1" strokeLinecap="round" /></svg>
-                                    Copy
-                                </button>
+                                ) : (
+                                    <p className="text-xs text-text-tertiary">No IAB classes available for this analysis yet. Payload falls back to deterministic category mapping.</p>
+                                )}
                             </div>
-                            <pre className="bg-[#11111b] px-5 py-4 overflow-x-auto text-[13px] leading-relaxed font-mono">
-                                <code>{freewheelPayload ? syntaxHighlight(JSON.stringify(freewheelPayload, null, 2)) : "{}"}</code>
-                            </pre>
+                            <div className="pt-3 border-t border-border-light">
+                                <h3 className="text-xs font-semibold uppercase tracking-[1.5px] text-text-secondary mb-2">Classification QA</h3>
+                                <div className="space-y-2 text-[11px]">
+                                    <p className="text-text-secondary">
+                                        Fallback applied: <span className="font-semibold">{analysis?.iabFallbackApplied ? "Yes" : "No"}</span>
+                                    </p>
+                                    {analysis?.iabFallbackReason && (
+                                        <p className="text-text-tertiary">{analysis.iabFallbackReason}</p>
+                                    )}
+                                    <details>
+                                        <summary className="cursor-pointer text-text-secondary font-medium">Raw model candidates ({analysis?.iabRawCandidates?.length || 0})</summary>
+                                        <div className="mt-2 flex flex-wrap gap-1.5">
+                                            {(analysis?.iabRawCandidates || []).map((item, idx) => (
+                                                <span key={`${item.tier1}-${item.tier2}-${idx}`} className="px-2 py-1 rounded border border-border-light bg-white text-text-secondary">
+                                                    {item.tier1} / {item.tier2} {item.code ? `(${item.code})` : ""} · {Math.round(item.confidence * 100)}%
+                                                </span>
+                                            ))}
+                                        </div>
+                                    </details>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    {analysisLoading ? <Skeleton className="h-48 w-full" /> : (
+                        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
+                            <div className="rounded-2xl overflow-hidden border border-gray-800 flex flex-col">
+                                <div className="bg-[#1e1e2e] px-4 py-2.5 flex items-center justify-between shrink-0">
+                                    <div className="flex items-center gap-2">
+                                        <div className="flex items-center gap-1.5">
+                                            <div className="w-2.5 h-2.5 rounded-full bg-red-400/80" />
+                                            <div className="w-2.5 h-2.5 rounded-full bg-yellow-400/80" />
+                                            <div className="w-2.5 h-2.5 rounded-full bg-green-400/80" />
+                                        </div>
+                                        <span className="text-[11px] text-gray-400 ml-2 font-mono">freewheel_payload.json</span>
+                                    </div>
+                                    <button onClick={() => { navigator.clipboard.writeText(JSON.stringify(freewheelPayload, null, 2)); }} className="text-[10px] text-gray-500 hover:text-gray-300 transition-colors flex items-center gap-1">
+                                        <svg viewBox="0 0 12 12" fill="none" className="w-3 h-3"><rect x="3" y="3" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1" /><path d="M2 9V2.5A.5.5 0 012.5 2H9" stroke="currentColor" strokeWidth="1" strokeLinecap="round" /></svg>
+                                        Copy
+                                    </button>
+                                </div>
+                                <pre className="bg-[#11111b] px-5 py-4 overflow-x-auto text-[13px] leading-relaxed font-mono">
+                                    <code>{freewheelPayload ? syntaxHighlight(JSON.stringify(freewheelPayload, null, 2)) : "{}"}</code>
+                                </pre>
+                            </div>
+                            <div className="rounded-2xl overflow-hidden border border-gray-800 flex flex-col min-h-0">
+                                <div className="bg-[#1e1e2e] px-4 py-2.5 flex items-center justify-between shrink-0">
+                                    <div className="flex items-center gap-2">
+                                        <div className="flex items-center gap-1.5">
+                                            <div className="w-2.5 h-2.5 rounded-full bg-red-400/80" />
+                                            <div className="w-2.5 h-2.5 rounded-full bg-yellow-400/80" />
+                                            <div className="w-2.5 h-2.5 rounded-full bg-green-400/80" />
+                                        </div>
+                                        <span className="text-[11px] text-gray-400 ml-2 font-mono">openrtb_mapped_view.json</span>
+                                    </div>
+                                    <button onClick={() => { navigator.clipboard.writeText(JSON.stringify(openRtbPayload, null, 2)); }} className="text-[10px] text-gray-500 hover:text-gray-300 transition-colors flex items-center gap-1">
+                                        <svg viewBox="0 0 12 12" fill="none" className="w-3 h-3"><rect x="3" y="3" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1" /><path d="M2 9V2.5A.5.5 0 012.5 2H9" stroke="currentColor" strokeWidth="1" strokeLinecap="round" /></svg>
+                                        Copy
+                                    </button>
+                                </div>
+                                <div className="flex flex-col bg-[#11111b]">
+                                    <pre className={`px-5 py-4 text-[13px] leading-relaxed font-mono ${openRtbExpanded ? "max-h-[900px] overflow-y-auto overflow-x-auto" : "max-h-[min(70vh,560px)] overflow-hidden"}`}>
+                                        <code>{openRtbPayload ? syntaxHighlight(JSON.stringify(openRtbPayload, null, 2)) : "{}"}</code>
+                                    </pre>
+                                    <div className="shrink-0 border-t border-white/10 px-5 py-2.5 flex justify-start">
+                                        <button
+                                            type="button"
+                                            onClick={() => setOpenRtbExpanded((v) => !v)}
+                                            className="text-[10px] text-gray-400 hover:text-gray-200 transition-colors"
+                                        >
+                                            {openRtbExpanded ? "View less" : "View more"}
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     )}
                 </div>
@@ -1216,6 +1429,60 @@ Return ONLY valid JSON, no markdown fences.`;
                     </p>
                 </div>
             </div>
+
+            {showOpenRtbExportModal && openRtbPayload && (
+                <div className="fixed inset-0 z-200 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="openrtb-export-title">
+                    <button
+                        type="button"
+                        className="absolute inset-0 bg-black/45 backdrop-blur-[2px]"
+                        aria-label="Dismiss"
+                        onClick={() => setShowOpenRtbExportModal(false)}
+                    />
+                    <div className="relative z-10 flex w-full max-w-3xl max-h-[min(90vh,880px)] flex-col rounded-2xl border border-border-light bg-white shadow-xl">
+                        <div className="flex items-start justify-between gap-3 border-b border-border-light px-5 py-4 shrink-0">
+                            <div>
+                                <h3 id="openrtb-export-title" className="text-base font-semibold text-text-primary">
+                                    Export OpenRTB mapped view
+                                </h3>
+                                <p className="mt-1 text-xs text-text-tertiary">
+                                    Preview the JSON file before downloading. Filename:{" "}
+                                    <span className="font-mono text-text-secondary">openrtb-mapped-{slug}-{videoId}.json</span>
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setShowOpenRtbExportModal(false)}
+                                className="shrink-0 rounded-lg p-1.5 text-text-tertiary hover:bg-gray-100 hover:text-text-primary transition-colors"
+                                aria-label="Close"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        <div className="min-h-0 flex-1 overflow-auto px-5 py-4">
+                            <pre className="rounded-xl border border-gray-800 bg-[#11111b] px-4 py-3 text-[12px] leading-relaxed font-mono overflow-x-auto max-h-[min(55vh,520px)] overflow-y-auto">
+                                <code>{syntaxHighlight(JSON.stringify(openRtbPayload, null, 2))}</code>
+                            </pre>
+                        </div>
+                        <div className="flex flex-col-reverse gap-2 border-t border-border-light px-5 py-4 sm:flex-row sm:justify-end sm:gap-3 shrink-0">
+                            <button
+                                type="button"
+                                onClick={() => setShowOpenRtbExportModal(false)}
+                                className="inline-flex items-center justify-center rounded-lg border border-border-light bg-white px-4 py-2 text-sm font-medium text-text-secondary transition-colors hover:bg-gray-50"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={downloadOpenRtbJson}
+                                className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-text-primary px-4 py-2 text-sm font-medium text-white shadow-sm transition-all duration-200 hover:bg-black hover:rounded-2xl hover:shadow-md"
+                            >
+                                <Download className="w-4 h-4 shrink-0" aria-hidden />
+                                Download JSON
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

@@ -4,8 +4,17 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import Hls from "hls.js";
+import dynamic from "next/dynamic";
 import AddCategoryModal from "../../components/AddCategoryModal";
-import EmbeddingsView from "../../components/EmbeddingsView";
+
+const EmbeddingsView = dynamic(() => import("../../components/EmbeddingsView"), {
+    ssr: false,
+    loading: () => (
+        <div className="rounded-2xl border border-border-light bg-gray-50/50 px-6 py-16 text-center text-sm text-text-tertiary">
+            Loading metadata view…
+        </div>
+    ),
+});
 import {
     getCategoryBySlug,
     updateCategoryContexts,
@@ -66,6 +75,7 @@ export default function AdCategoryDetailPage() {
     const [data, setData] = useState<AdCategory | null>(null);
     const [loading, setLoading] = useState(true);
     const [showVideoModal, setShowVideoModal] = useState(false);
+    const [exportingIab, setExportingIab] = useState(false);
 
     // Video data from cache (instant load, background refresh if stale)
     const { videos: allVideos, loading: videosLoading, refresh: refreshVideos } = useVideos();
@@ -178,6 +188,28 @@ export default function AdCategoryDetailPage() {
         setData({ ...data, exclusions: next });
     }
 
+    async function exportIabBundle() {
+        try {
+            setExportingIab(true);
+            const res = await fetch(`/api/adInventoryIabExport?slug=${encodeURIComponent(slug)}`);
+            if (!res.ok) throw new Error(`Export failed (${res.status})`);
+            const payload = await res.json();
+            const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `iab-freewheel-bundle-${slug}.json`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        } catch (err) {
+            console.error("[ad-inventory] IAB export failed:", err);
+        } finally {
+            setExportingIab(false);
+        }
+    }
+
     const unusedContextSuggestions = contextSuggestions.filter(
         (s) => !data?.targetContexts.includes(s) && s.toLowerCase().includes(contextInput.toLowerCase())
     ).slice(0, 5);
@@ -259,6 +291,14 @@ export default function AdCategoryDetailPage() {
                                 <path d="M6 1v10M1 6h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
                             </svg>
                             Add Video
+                        </button>
+                        <button
+                            onClick={exportIabBundle}
+                            disabled={exportingIab}
+                            className="flex items-center gap-2 px-4 py-2 rounded-xl border border-border-light text-sm font-medium text-text-primary hover:border-border-default hover:bg-gray-50 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            <svg viewBox="0 0 24 24" fill="none" className="w-4 h-4"><path d="M12 3v12m0 0l4-4m-4 4l-4-4M5 21h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                            {exportingIab ? "Exporting…" : "Export IAB Bundle"}
                         </button>
                     </div>
                 </div>
