@@ -174,6 +174,8 @@ const whyRows = [
 /* ── Gradient constants ─────────────────────────────────── */
 const GRAD = "linear-gradient(135deg, #D9F99D 0%, #FDE047 100%)";
 const GRAD_WASH = "linear-gradient(135deg, rgba(217,249,157,0.15) 0%, rgba(253,224,71,0.15) 100%)";
+const ARCHITECTURE_LUCIDCHART_URL =
+  "https://lucid.app/lucidchart/ef8d11e1-3f00-4bf0-b411-ab8e3bb3606b/edit?view_items=o97PhyrSgvaW%2Cyc8PiHljiUJe%2CD_7PDd.qF_w~%2CUh8PfmArC9R3%2Cgr8PjOz-iagi%2C-u8PfT3QVmS1%2COk8PFHaFqYe5%2CUj8PTZaGtt3P%2C6z8PX_fhmaE8%2CAN8PxOhZuzK-%2C0N8P32C~nzbK%2CoQ8PNkmzbcNI%2CBQ8P70VmeSOz%2C0N8PiNmrzY.o%2C0N8P5JYxcZ3Z%2C0N8PcvJGj~YA%2C0N8PAghTJfLr%2C0N8PNwKd5Cer%2C0N8P7ZQJkL5k%2C0N8P1P9s-s8g%2CBy8P8HKsplEp%2C-y8PC8hX52xj%2Cux8PV37i~0Bz%2C8x8P6biPsTC4%2CVx8Pvj2yoMg7%2Cuz8PB9v8U2~o%2Cwz8PkQRStyhT%2C0N8PPFxVCJfI%2Cw97PAN.GCjSP%2C5a8PobQdNG8C%2CZj8PDP9VmazD%2CON8PLiaeNf4n%2C6z8PPERmzORN%2Cpv8Pu3fnl9ib%2CBj8PQVmqVxYI%2CPr8PFA4giQX9%2Cfo8PU5izetbk%2CM_7PeRh-oBjv%2C0h8PZqnkdim4%2C4j8PblhJtVSw%2CuQ8PeQHU0Icd%2CxQ8PWNynGcvq%2CbA8Pz~9cV5Cs%2Cym8PRF9Y6gG7%2Cvr8PzYJ5LtX4%2CBu8PNideLDRC%2CKN8PBxiACflG%2C7N8PCwevxQbp&page=0_0&invitationId=inv_09de1972-142b-4369-9df4-f91eb3f5a949";
 
 /* ── Page ───────────────────────────────────────────────── */
 export default function Home() {
@@ -247,23 +249,38 @@ export default function Home() {
           </a>
         </div>
 
-        {/* Architecture + Demo panels */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div className="rounded-2xl border border-[#E5E7EB] bg-gray-50 flex flex-col items-center justify-center aspect-4/3 text-center p-8">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/TwelveLabs-Symbol.png" alt="" className="w-12 h-12 mb-4 opacity-20" />
-            <p className="text-sm font-medium text-gray-500 mb-1">Architecture Diagram</p>
-           
+        {/* Demo panel */}
+        <div className="rounded-2xl border border-[#E5E7EB] bg-gray-900 flex flex-col items-center justify-center aspect-video text-center p-8 relative overflow-hidden mb-4">
+          <div className="absolute inset-0 bg-linear-to-br from-gray-800 to-gray-950" />
+          <div className="relative z-10 w-14 h-14 rounded-full bg-white/10 border border-white/20 flex items-center justify-center mb-4">
+            <svg viewBox="0 0 24 24" fill="none" className="w-6 h-6 text-white ml-0.5">
+              <path d="M8 5L19 12L8 19V5Z" fill="currentColor" />
+            </svg>
           </div>
-          <div className="rounded-2xl border border-[#E5E7EB] bg-gray-900 flex flex-col items-center justify-center aspect-4/3 text-center p-8 relative overflow-hidden">
-            <div className="absolute inset-0 bg-linear-to-br from-gray-800 to-gray-950" />
-            <div className="relative z-10 w-14 h-14 rounded-full bg-white/10 border border-white/20 flex items-center justify-center mb-4">
-              <svg viewBox="0 0 24 24" fill="none" className="w-6 h-6 text-white ml-0.5">
-                <path d="M8 5L19 12L8 19V5Z" fill="currentColor" />
+          <p className="relative z-10 text-sm font-medium text-white/80 mb-1">Demo Video</p>
+        </div>
+
+        {/* Architecture diagram */}
+        <div className="rounded-2xl border border-[#E5E7EB] bg-gray-50 p-4">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/Architecture.png"
+            alt="Architecture diagram"
+            className="w-full h-auto rounded-xl object-contain"
+            draggable="false"
+          />
+          <div className="mt-3 text-right">
+            <a
+              href={ARCHITECTURE_LUCIDCHART_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 font-medium transition-colors"
+            >
+              View full-screen architecture
+              <svg viewBox="0 0 12 12" fill="none" className="w-3 h-3">
+                <path d="M2.5 9.5L9.5 2.5M9.5 2.5H5M9.5 2.5V7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
-            </div>
-            <p className="relative z-10 text-sm font-medium text-white/80 mb-1">Demo Video</p>
-            
+            </a>
           </div>
         </div>
       </section>

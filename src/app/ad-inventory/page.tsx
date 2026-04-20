@@ -223,7 +223,11 @@ export default function AdInventoryPage() {
 
             <AddCategoryModal
                 open={showAddModal}
-                onClose={() => { setShowAddModal(false); refreshCategories(); refreshVideos(); }}
+                onClose={(didUpload) => {
+                    setShowAddModal(false);
+                    refreshCategories();
+                    if (didUpload) refreshVideos();
+                }}
             />
         </div>
     );

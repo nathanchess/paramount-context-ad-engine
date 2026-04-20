@@ -108,20 +108,19 @@ export default function EmbeddingsView({ videos, categoryName }: EmbeddingsViewP
                 const chunk = toAnalyze.slice(i, i + chunkSize);
                 await Promise.all(chunk.map(async (video) => {
                     try {
-                        const meta = parseUserMeta(video.userMetadata);
                         const prompt = `Analyze this ad video. Return a JSON object with these exact keys:
-- "summary": 2-3 sentence description of what the ad shows and its message
-- "company": the brand or company featured in this ad
-- "proposedTitle": a compelling, concise ad title
-- "recommendedContexts": array of 3-5 literal visual and audio scene tags that you can actually see or hear (e.g., "Beach", "Sunny Sky", "Cocktails", "Friends Laughing"). Do not use abstract concepts.
-- "negativeCampaignContexts": array of 2-3 negative campaign contexts or settings to avoid for this specific ad (e.g. "Indoor Settings", "Negative Reviews", "Gloomy Weather").
-- "brandSafetyGARM": array of 1-3 strictly defined GARM (Global Alliance for Responsible Media) brand safety exclusions present or bordering in this video. Only use terms like: "Violence", "Underage", "Hate Speech", "Tragedy", "Crime", "Drugs", "Adult Content". If absolutely clean, return [].
-- "targetDemographics": array of 1-3 target demographic requirements for this ad (e.g., "Adults", "Male", "HHI $100K+"). If none, return [].
-- "negativeDemographics": array of 1-3 demographic exclusions ONLY IF the ad explicitly forbids an audience (e.g., alcohol ads excluding "Underage"). For general products (e.g., snacks, cars), return [].
-- "targetAudience": Object with 3 string arrays: "highPriority" (2-3 items), "mediumPriority" (1-2 items), and "lowPriority" (1-2 items). These are target audience affinities (e.g., Luxury, Spirits, Gen-Z).
-- "timelineMarkers": array of 3-6 objects with { "timestampSec": number, "label": short label, "reasoning": why this moment is relevant for ad targeting }
+                        - "summary": 2-3 sentence description of what the ad shows and its message
+                        - "company": the brand or company featured in this ad
+                        - "proposedTitle": a compelling, concise ad title
+                        - "recommendedContexts": array of 3-5 literal visual and audio scene tags that you can actually see or hear (e.g., "Beach", "Sunny Sky", "Cocktails", "Friends Laughing"). Do not use abstract concepts.
+                        - "negativeCampaignContexts": array of 2-3 negative campaign contexts or settings to avoid for this specific ad (e.g. "Indoor Settings", "Negative Reviews", "Gloomy Weather").
+                        - "brandSafetyGARM": array of 1-3 strictly defined GARM (Global Alliance for Responsible Media) brand safety exclusions present or bordering in this video. Only use terms like: "Violence", "Underage", "Hate Speech", "Tragedy", "Crime", "Drugs", "Adult Content". If absolutely clean, return [].
+                        - "targetDemographics": array of 1-3 target demographic requirements for this ad (e.g., "Adults", "Male", "HHI $100K+"). If none, return [].
+                        - "negativeDemographics": array of 1-3 demographic exclusions ONLY IF the ad explicitly forbids an audience (e.g., alcohol ads excluding "Underage"). For general products (e.g., snacks, cars), return [].
+                        - "targetAudience": Object with 3 string arrays: "highPriority" (2-3 items), "mediumPriority" (1-2 items), and "lowPriority" (1-2 items). These are target audience affinities (e.g., Luxury, Spirits, Gen-Z).
+                        - "timelineMarkers": array of 3-6 objects with { "timestampSec": number, "label": short label, "reasoning": why this moment is relevant for ad targeting }
 
-Return ONLY valid JSON, no markdown fences.`;
+                        Return ONLY valid JSON, no markdown fences.`;
 
                         const res = await fetch("/api/analyze", {
                             method: "POST",
@@ -162,7 +161,6 @@ Return ONLY valid JSON, no markdown fences.`;
         return () => {
             analyzingRef.current = false;
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [analysesLoaded, videos]);
 
     function fmtSize(bytes: number): string {
@@ -191,7 +189,6 @@ Return ONLY valid JSON, no markdown fences.`;
                     if (v.embedding && Array.isArray(v.embedding) && v.embedding.length > 0 && typeof v.embedding[0] === 'number') {
                         vec = v.embedding;
                     }
-                    // New format: Array of objects { startOffsetSec, endOffsetSec, vector }
                     else if (v.embedding_segments && Array.isArray(v.embedding_segments) && v.embedding_segments.length > 0) {
                         const segs = v.embedding_segments;
                         let validCount = 0;

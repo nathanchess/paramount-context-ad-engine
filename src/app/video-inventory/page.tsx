@@ -426,9 +426,9 @@ export default function VideoInventoryPage() {
 
             <VideoInventoryUploadModal
                 open={showUploadModal}
-                onClose={() => {
+                onClose={(didUpload) => {
                     setShowUploadModal(false);
-                    refreshVideos();
+                    if (didUpload) refreshVideos();
                 }}
             />
         </div>

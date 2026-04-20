@@ -570,9 +570,11 @@ export default function AdCategoryDetailPage() {
             {/* Add Video Modal (video-only mode) */}
             <AddCategoryModal
                 open={showVideoModal}
-                onClose={() => {
+                onClose={(didUpload) => {
                     setShowVideoModal(false);
-                    refreshVideos(); // Refresh cache after upload
+                    if (didUpload) {
+                        refreshVideos(); // Refresh cache only after successful upload
+                    }
                 }}
                 videoOnly
                 categoryName={data.category}

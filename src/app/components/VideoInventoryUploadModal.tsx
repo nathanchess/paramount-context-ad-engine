@@ -6,7 +6,7 @@ import { invalidateVideoCache } from "../lib/videoCache";
 
 interface VideoInventoryUploadModalProps {
     open: boolean;
-    onClose: () => void;
+    onClose: (didUpload?: boolean) => void;
     /** TwelveLabs index name for video indexing */
     targetIndex?: string;
 }
@@ -213,6 +213,7 @@ export default function VideoInventoryUploadModal({
     const [dragOver, setDragOver] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [uploading, setUploading] = useState(false);
+    const [didUpload, setDidUpload] = useState(false);
 
     const [uploadProgress, setUploadProgress] = useState<UploadProgress>({
         phase: "idle",
@@ -272,6 +273,7 @@ export default function VideoInventoryUploadModal({
 
     function handleReset() {
         if (uploading) return; // Prevent closing during upload
+        const shouldRefresh = didUpload;
         setTags([]);
         setTagInput("");
         videoFiles.forEach((v) => URL.revokeObjectURL(v.url));
@@ -280,7 +282,8 @@ export default function VideoInventoryUploadModal({
             phase: "idle", percent: 0, message: "",
             blobCompleted: 0, blobTotal: 0, tlCompleted: 0, tlTotal: 0, errors: [],
         });
-        onClose();
+        setDidUpload(false);
+        onClose(shouldRefresh);
     }
 
     /* ── Upload Pipeline ──────────────────────────────────── */
@@ -288,6 +291,7 @@ export default function VideoInventoryUploadModal({
         if (videoFiles.length === 0 || uploading) return;
 
         setUploading(true);
+        setDidUpload(false);
         const total = videoFiles.length;
         const errors: string[] = [];
 
@@ -437,6 +441,7 @@ export default function VideoInventoryUploadModal({
                             } else if (eventName === "complete") {
                                 // Invalidate cached video data so next page load fetches fresh
                                 invalidateVideoCache();
+                                setDidUpload(true);
                                 setUploadProgress((prev) => ({
                                     ...prev,
                                     phase: "done",

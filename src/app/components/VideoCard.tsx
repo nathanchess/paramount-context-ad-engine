@@ -88,12 +88,12 @@ export default function VideoCard({ video, slug, searchMatch, viewType = "ad-inv
             if (!hovering) return;
             el.play()
                 .then(() => {
-                    // Unmute after play starts — browsers allow this post-interaction
+                    // Unmute after play starts browsers allow this post-interaction
                     el.muted = false;
                     setMuted(false);
                 })
                 .catch(() => {
-                    // Autoplay blocked — stay muted, still show video
+                    // Autoplay blocked stay muted, still show video
                 });
         };
         // First-hover reliability: attempt play once metadata/canplay is ready.
@@ -146,7 +146,7 @@ export default function VideoCard({ video, slug, searchMatch, viewType = "ad-inv
                 }
             >
                 <div className="absolute inset-0 z-0">
-                    {/* Video Player — muted attribute intentionally omitted;
+                    {/* Video Player muted attribute intentionally omitted;
                          mute state is controlled via videoRef.current.muted (JS property)
                          so audio can be enabled after user interaction */}
                     {hlsUrl && (

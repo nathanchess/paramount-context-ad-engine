@@ -18,59 +18,6 @@ import type {
   UserEligibilityResult,
 } from "./types";
 
-/* ── Token helpers ───────────────────────────────────────── */
-
-const STOP_WORDS = new Set([
-  "the", "and", "for", "with", "that", "this", "from", "into", "are",
-  "was", "has", "have", "its", "not", "but", "can", "all", "who", "she",
-  "her", "his", "him", "they", "them", "their", "there", "here", "when",
-  "what", "which", "where", "how", "out", "one", "two", "three",
-]);
-
-function tokenize(text: string): string[] {
-  return text
-    .toLowerCase()
-    .split(/\W+/)
-    .filter((w) => w.length >= 3 && !STOP_WORDS.has(w));
-}
-
-function buildSegmentTokens(segment: Segment): Set<string> {
-  return new Set(
-    tokenize(
-      [
-        segment.scene_context ?? "",
-        segment.environment ?? "",
-        ...(segment.ad_suitability?.suitable_categories ?? []),
-        ...(segment.ad_suitability?.contextual_themes ?? []),
-        ...(segment.activities ?? []),
-        ...(segment.objects_of_interest ?? []),
-      ].join(" ")
-    )
-  );
-}
-
-// Maps a category_key to broad semantic keywords that often appear in matching scene text
-const CATEGORY_SEMANTIC_KEYWORDS: Record<string, string[]> = {
-  alcohol_premium: ["spirits", "whiskey", "bourbon", "scotch", "vodka", "cocktail", "bar", "wine", "luxury", "premium", "celebration", "social", "entertainment", "dining", "nightlife", "party", "drink", "toast", "champagne"],
-  alcohol_beer: ["beer", "sports", "party", "bar", "casual", "social", "friends", "game", "pub", "tailgate", "celebration"],
-  cpg_snacks: ["snack", "food", "casual", "party", "gaming", "fun", "friends", "social", "sports", "eat", "crunch", "munch"],
-  cpg_food: ["food", "eating", "dining", "meal", "restaurant", "cooking", "kitchen", "family", "table", "dinner"],
-  automotive_truck: ["truck", "vehicle", "drive", "outdoor", "adventure", "construction", "work", "road", "haul", "off-road"],
-  automotive_luxury: ["luxury", "premium", "drive", "performance", "vehicle", "style", "prestige", "sedan", "sports"],
-  financial_services: ["finance", "money", "invest", "wealth", "business", "plan", "future", "retirement", "savings"],
-  fitness_wellness: ["fitness", "health", "wellness", "active", "gym", "exercise", "sport", "training", "run", "workout"],
-  home_improvement: ["home", "house", "renovation", "build", "kitchen", "garden", "remodel", "diy", "tools"],
-  travel_luxury: ["travel", "vacation", "resort", "hotel", "beach", "destination", "adventure", "explore", "destination"],
-  entertainment: ["entertainment", "fun", "comedy", "movie", "music", "show", "stream", "laugh", "event", "concert"],
-  technology: ["tech", "digital", "phone", "app", "software", "device", "smart", "screen", "data"],
-  insurance: ["insurance", "protect", "coverage", "safe", "secure", "family", "home", "vehicle"],
-  pharmaceutical: ["health", "medicine", "doctor", "relief", "wellness", "symptom", "treatment"],
-  retail_general: ["shop", "store", "sale", "deal", "fashion", "style", "clothes", "brand"],
-  qsr_fast_food: ["food", "fast", "burger", "pizza", "eat", "restaurant", "quick", "meal", "delivery"],
-  telecom: ["phone", "data", "connect", "network", "mobile", "internet", "stream", "call"],
-  sports_betting: ["sports", "game", "bet", "odds", "win", "team", "score", "champion"],
-};
-
 // Maps category_key to the segment's suitable_categories strings it typically matches
 const CATEGORY_TO_AD_SUITABLE: Record<string, string[]> = {
   alcohol_premium: ["premium spirits", "spirits", "fine dining", "luxury goods", "entertainment"],
@@ -839,10 +786,6 @@ export function rankAdsForBreak(
    Pure function: user + ad -> eligibility result.
    ══════════════════════════════════════════════════════════════ */
 
-function clamp01(n: number): number {
-  return Math.max(0, Math.min(1, n));
-}
-
 function extractHHI(tag: string): number | null {
   const match = String(tag).match(/hhi\s*\$(\d+)k\+/i);
   return match ? parseInt(match[1], 10) : null;
@@ -1091,7 +1034,7 @@ export function scoreAdUserEligibility(
       adCohortAffinities,
       adCategoryKey,
     });
-    scores.categoryAffinity = clamp01(baseAffinity + boost);
+    scores.categoryAffinity = Math.max(0, Math.min(1, baseAffinity + boost));
     const affinityPts = Math.round(scores.categoryAffinity * 40);
 
     if (directAffinity >= 0.7) {
