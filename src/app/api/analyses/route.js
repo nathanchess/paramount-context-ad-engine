@@ -3,9 +3,9 @@ import { listAllBlobs } from '../../lib/blobList';
 
 export const dynamic = 'force-dynamic';
 
-const ANALYSIS_V4_PREFIX = 'analysis_v4_';
-/** Matches blob pathname: analysis_v4_<videoId>_<contractHash>.json */
-const V4_VIDEO_ID_RE = /^analysis_v4_([^_]+)_/;
+const ANALYSIS_V5_PREFIX = 'analysis_v5_';
+/** Matches blob pathname: analysis_v5_<videoId>_<contractHash>.json */
+const V5_VIDEO_ID_RE = /^analysis_v5_([^_]+)_/;
 
 function parseAnalysisPayload(rawResult) {
     let parsed = rawResult;
@@ -28,12 +28,12 @@ function parseAnalysisPayload(rawResult) {
 
 export async function GET() {
     try {
-        const blobs = await listAllBlobs(ANALYSIS_V4_PREFIX);
+        const blobs = await listAllBlobs(ANALYSIS_V5_PREFIX);
         const bestByVideoId = new Map();
 
         for (const blob of blobs) {
             const pathname = blob.pathname || '';
-            const match = pathname.match(V4_VIDEO_ID_RE);
+            const match = pathname.match(V5_VIDEO_ID_RE);
             const videoId = match?.[1];
             if (!videoId) continue;
 
@@ -50,7 +50,7 @@ export async function GET() {
         await Promise.all(
             winners.map(async (blob) => {
                 const pathname = blob.pathname || '';
-                const match = pathname.match(V4_VIDEO_ID_RE);
+                const match = pathname.match(V5_VIDEO_ID_RE);
                 const videoId = match?.[1];
                 if (!videoId) return;
 

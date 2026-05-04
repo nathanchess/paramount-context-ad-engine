@@ -1,8 +1,17 @@
 
 const fs = require('fs');
+const path = require('path');
 const { TwelvelabsApiClient } = require('twelvelabs-js');
 const { OpenAI } = require('openai');
 require('dotenv').config();
+
+const { formatSceneTextForTaxonomyEmbedding } = require(path.join(
+    __dirname,
+    'src',
+    'app',
+    'lib',
+    'taxonomySceneEmbeddingText.js'
+));
 
 // REPLACE HERE.
 const TL_API_KEY = process.env.TL_API_KEY || '';
@@ -355,12 +364,14 @@ async function IAB_Analysis_With_Semantic_Search(assetId) {
             segmentDefinitions: [
                 {
                     id: 'scene_classification',
-                    description: 'Scene-level semantic descriptions for ad targeting.',
+                    description:
+                        'Scene-level signals for what is advertised or shown on screen (products, brands, people, places, activities, mood). Not how the spot was filmed.',
                     fields: [
                         {
                             name: 'scene_description',
                             type: 'string',
-                            description: 'Describe the primary subject, actions, and mood of this scene in 2 sentences.'
+                            description:
+                                'Two short sentences: visible products or services, brands or packaging if any, human activities and setting (indoor/outdoor, venue type), and overall tone. Do not describe cameras, editing, video production, or filmmaking unless those are literally the product being sold.'
                         }
                     ]
                 }
@@ -380,9 +391,13 @@ async function IAB_Analysis_With_Semantic_Search(assetId) {
         const description = scene?.metadata?.scene_description;
         if (!description || typeof description !== 'string') continue;
 
+        const categoryKey = String(process.env.AD_CATEGORY_KEY || '').trim();
+        const embeddingInput = formatSceneTextForTaxonomyEmbedding(description, {
+            categoryKey: categoryKey || undefined
+        });
         const embeddingResponse = await openai.embeddings.create({
             model: 'text-embedding-3-small',
-            input: description
+            input: embeddingInput
         });
         const sceneEmbedding = embeddingResponse?.data?.[0]?.embedding || [];
 
@@ -400,6 +415,7 @@ async function IAB_Analysis_With_Semantic_Search(assetId) {
             start: scene.startTime ?? scene.start_time ?? scene.start,
             end: scene.endTime ?? scene.end_time ?? scene.end,
             scene_description: description,
+            embeddingTextForTaxonomyMatch: embeddingInput,
             matched_iab_id: best?.iab_id || null,
             matched_breadcrumb: best?.breadcrumb || '',
             matched_rich_text: best?.rich_text || '',

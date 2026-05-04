@@ -3,8 +3,8 @@ import { listAllBlobs } from "../../lib/blobList";
 
 export const dynamic = "force-dynamic";
 
-/** Matches analysis_v4_<videoId>_<contractHash>.json */
-const V4_VIDEO_ID_RE = /^analysis_v4_([^_]+)_/;
+/** Matches analysis_v5_<videoId>_<contractHash>.json */
+const V5_VIDEO_ID_RE = /^analysis_v5_([^_]+)_/;
 
 const SLUG_TO_CATEGORY_KEY = {
   "premium-spirits": "alcohol_premium",
@@ -126,11 +126,11 @@ export async function GET() {
       }
     });
 
-    // 2. Newest analysis_v4 blob per videoId (same rule as /api/analyses, IAB export)
-    const analysisBlobs = await listAllBlobs("analysis_v4_");
+    // 2. Newest analysis_v5 blob per videoId (same rule as /api/analyses, IAB export; video list still api_video_cache_v3_)
+    const analysisBlobs = await listAllBlobs("analysis_v5_");
     const analysesByVideoId = new Map();
     for (const blob of analysisBlobs) {
-      const match = blob.pathname.match(V4_VIDEO_ID_RE);
+      const match = blob.pathname.match(V5_VIDEO_ID_RE);
       const videoId = match?.[1];
       if (!videoId) continue;
       const prior = analysesByVideoId.get(videoId);
@@ -145,7 +145,7 @@ export async function GET() {
     const analysisMap = {};
     await Promise.all(
       [...analysesByVideoId.values()].map(async (blob) => {
-        const match = blob.pathname.match(V4_VIDEO_ID_RE);
+        const match = blob.pathname.match(V5_VIDEO_ID_RE);
         const videoId = match?.[1];
         if (!videoId) return;
         try {

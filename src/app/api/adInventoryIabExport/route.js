@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { listAllBlobs } from "../../lib/blobList";
-import { normalizeIabWithPolicy } from "../../lib/iabTaxonomy";
+import {
+  finalizeSemanticTaxonomyIab,
+  isSemanticDirectTaxonomyPayload,
+  normalizeIabItemsFromUnknown,
+  normalizeIabWithPolicy,
+} from "../../lib/iabTaxonomy";
 import { buildOpenRtbMappedView } from "../../lib/openRtbMapping";
 
 export const dynamic = "force-dynamic";
@@ -71,10 +76,10 @@ export async function GET(request) {
       }
     });
 
-    const analysisBlobs = await listAllBlobs("analysis_v4_");
+    const analysisBlobs = await listAllBlobs("analysis_v5_");
     const analysesByVideoId = new Map();
     for (const blob of analysisBlobs) {
-      const match = blob.pathname.match(/^analysis_v4_([^_]+)_/);
+      const match = blob.pathname.match(/^analysis_v5_([^_]+)_/);
       const videoId = match?.[1];
       if (!videoId) continue;
       const prior = analysesByVideoId.get(videoId);
@@ -100,7 +105,10 @@ export async function GET(request) {
       }
       if (!parsed) continue;
 
-      const policy = normalizeIabWithPolicy(parsed.iab, categoryKey);
+      const rawIab = normalizeIabItemsFromUnknown(parsed.iab);
+      const policy = isSemanticDirectTaxonomyPayload(rawIab)
+        ? finalizeSemanticTaxonomyIab(rawIab)
+        : normalizeIabWithPolicy(rawIab, categoryKey);
       const recommendedContexts = Array.isArray(parsed.recommendedContexts) ? parsed.recommendedContexts : [];
       const negativeCampaignContexts = Array.isArray(parsed.negativeCampaignContexts) ? parsed.negativeCampaignContexts : [];
       const brandSafety = Array.isArray(parsed.brandSafetyGARM) ? parsed.brandSafetyGARM : [];
@@ -128,6 +136,7 @@ export async function GET(request) {
           vw_iab_t1: policy.effectiveTier1.join(","),
           vw_iab_t2: policy.effectiveTier2.join(","),
           vw_iab_t3: policy.effectiveTier3.join(","),
+          vw_iab_t4: policy.effectiveTier4.join(","),
           vw_iab_codes: policy.effectiveCodes.join(","),
           vw_iab_conf: policy.averageConfidence.toFixed(3),
         },

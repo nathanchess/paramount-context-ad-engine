@@ -21,6 +21,7 @@ import {
     updateCategoryExclusions,
     type AdCategory,
 } from "../../lib/adInventoryStore";
+import { getCategoryKeyFromSlug } from "../../lib/adInventoryCategoryKey";
 import { useVideos, invalidateVideoCache, type CachedVideo } from "../../lib/videoCache";
 import VideoCard from "../../components/VideoCard";
 
@@ -76,6 +77,8 @@ export default function AdCategoryDetailPage() {
     const [loading, setLoading] = useState(true);
     const [showVideoModal, setShowVideoModal] = useState(false);
     const [exportingIab, setExportingIab] = useState(false);
+    const [warmingCache, setWarmingCache] = useState(false);
+    const [warmCacheSummary, setWarmCacheSummary] = useState<string | null>(null);
 
     // Video data from cache (instant load, background refresh if stale)
     const { videos: allVideos, loading: videosLoading, refresh: refreshVideos } = useVideos();
@@ -188,6 +191,44 @@ export default function AdCategoryDetailPage() {
         setData({ ...data, exclusions: next });
     }
 
+    async function warmAllAdCaches() {
+        if (videos.length === 0) return;
+        setWarmingCache(true);
+        setWarmCacheSummary(null);
+        try {
+            const res = await fetch("/api/adInventoryWarmCache", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    slug,
+                    categoryKey: getCategoryKeyFromSlug(slug),
+                    videos: videos.map((v) => ({
+                        id: v.id,
+                        videoUrl: v.hls?.videoUrl?.trim() || undefined,
+                    })),
+                }),
+            });
+            const data = (await res.json()) as {
+                ok?: boolean;
+                errors?: { videoId: string | null; error: string }[];
+                knn?: { saved?: boolean; videosWithVectors?: number; pathname?: string };
+            };
+            if (!res.ok) {
+                throw new Error((data as { error?: string }).error || `Request failed (${res.status})`);
+            }
+            const errN = data.errors?.length ?? 0;
+            setWarmCacheSummary(
+                data.ok
+                    ? `Caches ready for ${videos.length} video(s). Marengo k-NN saved for ${data.knn?.videosWithVectors ?? 0} creative(s).`
+                    : `Completed with ${errN} issue(s). k-NN: ${data.knn?.saved ? "saved" : "not saved"} (${data.knn?.videosWithVectors ?? 0} with vectors). See server logs for details.`
+            );
+        } catch (err) {
+            setWarmCacheSummary(err instanceof Error ? err.message : "Warm cache failed");
+        } finally {
+            setWarmingCache(false);
+        }
+    }
+
     async function exportIabBundle() {
         try {
             setExportingIab(true);
@@ -293,6 +334,18 @@ export default function AdCategoryDetailPage() {
                             Add Video
                         </button>
                         <button
+                            type="button"
+                            onClick={warmAllAdCaches}
+                            disabled={warmingCache || videos.length === 0}
+                            className="flex items-center gap-2 px-4 py-2 rounded-xl border border-border-light text-sm font-medium text-text-primary hover:border-border-default hover:bg-gray-50 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                            title="Runs Pegasus metadata, semantic IAB, and Marengo segment embeddings in parallel for each video that is missing blob cache, then saves a k-NN graph (cosine on mean segment vectors) for this category."
+                        >
+                            <svg viewBox="0 0 24 24" fill="none" className="w-4 h-4" aria-hidden>
+                                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                            {warmingCache ? "Warming caches…" : "Warm all caches"}
+                        </button>
+                        <button
                             onClick={exportIabBundle}
                             disabled={exportingIab}
                             className="flex items-center gap-2 px-4 py-2 rounded-xl border border-border-light text-sm font-medium text-text-primary hover:border-border-default hover:bg-gray-50 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -321,6 +374,14 @@ export default function AdCategoryDetailPage() {
                     </button>
                 </div>
             </header>
+
+            {warmCacheSummary && (
+                <div className="px-8 pt-4">
+                    <p className="text-xs text-text-secondary rounded-lg border border-border-light bg-gray-50/80 px-4 py-2">
+                        {warmCacheSummary}
+                    </p>
+                </div>
+            )}
 
             {/* ── Content (full width) ───────────────────────────── */}
             <div className="px-8 py-6 space-y-8">

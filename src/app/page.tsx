@@ -269,19 +269,19 @@ export default function Home() {
             className="w-full h-auto rounded-xl object-contain"
             draggable="false"
           />
-          <div className="mt-3 text-right">
-            <a
-              href={ARCHITECTURE_LUCIDCHART_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 font-medium transition-colors"
-            >
-              View full-screen architecture
-              <svg viewBox="0 0 12 12" fill="none" className="w-3 h-3">
-                <path d="M2.5 9.5L9.5 2.5M9.5 2.5H5M9.5 2.5V7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </a>
-          </div>
+        </div>
+        <div className="mt-3 flex justify-end">
+          <a
+            href={ARCHITECTURE_LUCIDCHART_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 font-medium transition-colors"
+          >
+            View full-screen architecture
+            <svg viewBox="0 0 12 12" fill="none" className="w-3 h-3" aria-hidden>
+              <path d="M2.5 9.5L9.5 2.5M9.5 2.5H5M9.5 2.5V7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </a>
         </div>
       </section>
 

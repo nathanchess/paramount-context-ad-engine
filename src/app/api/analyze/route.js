@@ -1,20 +1,9 @@
 import { TwelveLabs } from "twelvelabs-js"
 import { NextResponse } from "next/server"
-import { put } from '@vercel/blob';
-import { listAllBlobs } from '../../lib/blobList';
+import { get, put } from '@vercel/blob';
+import { pathnameAnalyzeCache } from "../../lib/adInventoryBlobPathnames.js";
 
 export const maxDuration = 120;
-const ANALYSIS_CACHE_VERSION = "v4";
-
-function stableHash(input) {
-    const text = typeof input === "string" ? input : JSON.stringify(input || {});
-    let hash = 5381;
-    for (let i = 0; i < text.length; i++) {
-        hash = ((hash << 5) + hash) + text.charCodeAt(i);
-        hash = hash >>> 0;
-    }
-    return hash.toString(16);
-}
 
 
 export async function POST(request) {
@@ -43,20 +32,18 @@ export async function POST(request) {
     }
 
     try {
-        // 1. Check if we already cached this analysis in Vercel Blob
-        const contractHash = stableHash({ prompt, response_format, temperature: parameters.temperature });
-        const blobName = `analysis_${ANALYSIS_CACHE_VERSION}_${videoId}_${contractHash}.json`;
-        const blobs = await listAllBlobs(blobName);
+        // 1. Serve from Vercel Blob if this exact analysis was stored before (pathname lookup, not list scan)
+        const blobName = pathnameAnalyzeCache(videoId, prompt, response_format, parameters.temperature);
 
-        if (blobs.length > 0) {
-            console.log(`[DEBUG] Found cached analysis for ${videoId} in Vercel Blob`);
-            const best = blobs.reduce((a, b) =>
-                new Date(a.uploadedAt).getTime() > new Date(b.uploadedAt).getTime() ? a : b
-            );
-            const cachedRes = await fetch(best.url);
-            if (cachedRes.ok) {
-                const cachedData = await cachedRes.json();
+        const cached = await get(blobName, { access: 'public' });
+        if (cached?.statusCode === 200 && cached.stream) {
+            const raw = await new Response(cached.stream).text();
+            try {
+                const cachedData = JSON.parse(raw);
+                console.log(`[DEBUG] Blob cache hit for ${videoId}`);
                 return NextResponse.json(cachedData, { status: 200 });
+            } catch {
+                // corrupt cache object — fall through and re-analyze
             }
         }
 

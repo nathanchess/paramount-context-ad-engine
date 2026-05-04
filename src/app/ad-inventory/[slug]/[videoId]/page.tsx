@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import Hls from "hls.js";
@@ -8,8 +8,16 @@ import { hlsClientConfig } from "../../../lib/hlsClientConfig";
 import { getCategoryBySlug, type AdCategory } from "../../../lib/adInventoryStore";
 import { useVideos, type CachedVideo } from "../../../lib/videoCache";
 import type { IabTaxonomyItem } from "../../../lib/types";
-import { normalizeIabWithPolicy, formatIabTableForPrompt } from "../../../lib/iabTaxonomy";
+import {
+    finalizeSemanticTaxonomyIab,
+    isSemanticDirectTaxonomyPayload,
+    normalizeIabItemsFromUnknown,
+    normalizeIabWithPolicy,
+    type IabPolicyDiagnostics,
+} from "../../../lib/iabTaxonomy";
 import { buildOpenRtbMappedView } from "../../../lib/openRtbMapping";
+import { AD_INVENTORY_DETAIL_ANALYZE_PROMPT } from "../../../lib/adInventoryDetailAnalyzePrompt";
+import { getCategoryKeyFromSlug } from "../../../lib/adInventoryCategoryKey";
 import { X, Clock, FileText, Database, Download, Cpu, Users, UserX } from "lucide-react";
 
 /* ── Types ──────────────────────────────────────────────── */
@@ -42,11 +50,14 @@ interface AnalysisData {
     iabTopTier1: string[];
     iabTopTier2: string[];
     iabTopTier3: string[];
+    iabTopTier4: string[];
     iabCodes: string[];
     iabConfidence: string;
     iabFallbackApplied: boolean;
     iabFallbackReason: string | null;
     iabRawCandidates: IabTaxonomyItem[];
+    /** How IAB rows were chosen (thresholds, counts) — explains fallback vs medium band. */
+    iabPolicyDiagnostics: IabPolicyDiagnostics;
 }
 
 interface MockUser {
@@ -210,16 +221,6 @@ function toSnakeCaseTag(input: string): string {
         .replace(/_+/g, "_");
 }
 
-function getCategoryKeyFromSlug(slug: string): string {
-    const slugToCategoryKey: Record<string, string> = {
-        "premium-spirits": "alcohol_premium",
-        "automotive-truck": "automotive_truck",
-        "cpg-snacks": "cpg_snacks",
-        "financial-services": "financial_services",
-    };
-    return slugToCategoryKey[slug] ?? toSnakeCaseTag(slug);
-}
-
 function deriveCategoryCohortTags(categoryKey: string): string[] {
     const CATEGORY_TAGS: Record<string, string[]> = {
         alcohol_premium: [
@@ -293,29 +294,29 @@ function deriveVideoCohortTags(summary: string, contexts: string[]): string[] {
     return Array.from(new Set(derived));
 }
 
-function normalizeIabItems(input: unknown): IabTaxonomyItem[] {
-    if (!Array.isArray(input)) return [];
-    return input
-        .map<IabTaxonomyItem | null>((item) => {
-            if (!item || typeof item !== "object") return null;
-            const record = item as Record<string, unknown>;
-            const tier1 = typeof record.tier1 === "string" ? record.tier1.trim() : "";
-            const tier2 = typeof record.tier2 === "string" ? record.tier2.trim() : "";
-            const tier3 = typeof record.tier3 === "string" ? record.tier3.trim() : "";
-            const code = typeof record.code === "string" ? record.code.trim() : "";
-            const confidence = typeof record.confidence === "number"
-                ? Math.max(0, Math.min(1, record.confidence))
-                : 0;
-            if (!tier1 || !tier2) return null;
-            return { tier1, tier2, tier3: tier3 || undefined, code, confidence };
-        })
-        .filter((v): v is IabTaxonomyItem => v !== null);
+/** CT 3.1 `taxonomyNodeId` values from both policy output and pre-policy rows (dedupe can drop an id from `iab` only). */
+function collectUniqueTaxonomy31NodeIds(iab: IabTaxonomyItem[], raw: IabTaxonomyItem[]): string[] {
+    const ids: string[] = [];
+    for (const row of [...iab, ...raw]) {
+        const id = row.taxonomyNodeId;
+        if (id != null && String(id).trim()) ids.push(String(id).trim());
+    }
+    return [...new Set(ids)];
 }
 
 function normalizeAnalysis(raw: unknown, categoryKey: string): AnalysisData {
     const parsed = (raw && typeof raw === "object") ? (raw as Record<string, unknown>) : {};
-    const rawIab = normalizeIabItems(parsed.iab);
-    const policy = normalizeIabWithPolicy(rawIab, categoryKey);
+    const rawIab = normalizeIabItemsFromUnknown(parsed.iab);
+    const policy = isSemanticDirectTaxonomyPayload(rawIab)
+        ? finalizeSemanticTaxonomyIab(rawIab)
+        : normalizeIabWithPolicy(rawIab, categoryKey);
+
+    if (typeof console !== "undefined" && console.warn) {
+        console.warn("[IAB policy]", policy.diagnostics, {
+            fallbackApplied: policy.fallbackApplied,
+            fallbackReason: policy.fallbackReason,
+        });
+    }
 
     return {
         summary: typeof parsed.summary === "string" ? parsed.summary : "",
@@ -332,11 +333,13 @@ function normalizeAnalysis(raw: unknown, categoryKey: string): AnalysisData {
         iabTopTier1: policy.effectiveTier1,
         iabTopTier2: policy.effectiveTier2,
         iabTopTier3: policy.effectiveTier3,
+        iabTopTier4: policy.effectiveTier4,
         iabCodes: policy.effectiveCodes,
         iabConfidence: policy.averageConfidence.toFixed(3),
         iabFallbackApplied: policy.fallbackApplied,
         iabFallbackReason: policy.fallbackReason,
         iabRawCandidates: rawIab,
+        iabPolicyDiagnostics: policy.diagnostics,
     };
 }
 
@@ -355,6 +358,8 @@ export default function AdVideoDetailPage() {
     const hlsRef = useRef<Hls | null>(null);
     const timelineRef = useRef<HTMLDivElement>(null);
     const playerContainerRef = useRef<HTMLDivElement>(null);
+    /** Bumped on `videoId` change so stale in-flight analysis cannot overwrite state. */
+    const analysisGenerationRef = useRef(0);
     const [videoTime, setVideoTime] = useState(0);
     const [videoDuration, setVideoDuration] = useState(0);
     const [isPlaying, setIsPlaying] = useState(false);
@@ -377,6 +382,14 @@ export default function AdVideoDetailPage() {
     const [openRtbExpanded, setOpenRtbExpanded] = useState(false);
     const [showOpenRtbExportModal, setShowOpenRtbExportModal] = useState(false);
 
+    /* Clear prior video analysis as soon as the route changes so we never show stale labels. */
+    useLayoutEffect(() => {
+        analysisGenerationRef.current += 1;
+        setAnalysis(null);
+        setAnalysisLoading(true);
+        setAffinityResult(null);
+    }, [videoId]);
+
     // Use cached videos (instant load from localStorage)
     const { videos: allVideos, loading } = useVideos();
     const video = useMemo(() => allVideos.find((v) => v.id === videoId) || null, [allVideos, videoId]);
@@ -388,51 +401,57 @@ export default function AdVideoDetailPage() {
     // Call analyze API once video is loaded
     const runAnalysis = useCallback(async () => {
         if (!video) return;
+        const gen = analysisGenerationRef.current;
         const categoryKey = getCategoryKeyFromSlug(slug);
 
         setAnalysisLoading(true);
         try {
-            const invCategory = getCategoryBySlug(slug);
-            const categoryLabel = invCategory?.category || slug.replace(/-/g, " ");
-            const iabBlock = formatIabTableForPrompt(categoryKey, categoryLabel);
-
-            const prompt = `Analyze this ad video. Return a JSON object with these exact keys:
-            - "summary": 2-3 sentence description of what the ad shows and its message
-            - "company": the brand or company featured in this ad
-            - "proposedTitle": a compelling, concise ad title
-            - "recommendedContexts": array of 3-5 literal visual and audio scene tags that you can actually see or hear (e.g., "Beach", "Sunny Sky", "Cocktails", "Friends Laughing"). Do not use abstract concepts.
-            - "negativeCampaignContexts": array of 2-3 negative campaign contexts or settings to avoid for this specific ad (e.g. "Indoor Settings", "Negative Reviews", "Gloomy Weather").
-            - "brandSafetyGARM": array of 1-3 strictly defined GARM (Global Alliance for Responsible Media) brand safety exclusions present or bordering in this video. Only use terms like: "Violence", "Underage", "Hate Speech", "Tragedy", "Crime", "Drugs", "Adult Content". If absolutely clean, return [].
-            - "targetDemographics": array of 2-4 strings describing the target age, gender, and household income (e.g., "Male", "30s", "HHI $100K+").
-            - "negativeDemographics": array of 1-3 strings describing demographics who should NOT see this ad (e.g., "Teenagers", "Underage").
-            - "targetAudience": Object with 3 string arrays: "highPriority" (2-3 items), "mediumPriority" (1-2 items), and "lowPriority" (1-2 items). These are target audience affinities (e.g., Luxury, Spirits, Gen-Z).
-            - "timelineMarkers": array of 3-6 objects with { "timestampSec": number, "label": short label, "reasoning": why this moment is relevant for ad targeting }
-            - "iab": array of 2-6 objects. Each object MUST be one of the allowed rows below (identical "tier1", "tier2", optional "tier3", and "code" strings). Include "confidence": number from 0 to 1 per row. Never use IAB codes or tier labels that are not in the allowed list.
-            - "iabTopTier1": array of top 1-3 tier1 labels copied from your chosen iab rows (must match those rows exactly)
-            - "iabTopTier2": array of top 2-5 tier2 labels copied from your chosen iab rows (must match those rows exactly)
-            - "iabTopTier3": array of top 0-5 tier3 labels copied from your chosen iab rows when available (must match those rows exactly)
-
-            ${iabBlock}
-
-            Return ONLY valid JSON, no markdown fences.`;
-
             const res = await fetch("/api/analyze", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ videoId: video.id, prompt }),
+                body: JSON.stringify({ videoId: video.id, prompt: AD_INVENTORY_DETAIL_ANALYZE_PROMPT }),
             });
             if (!res.ok) throw new Error("Analysis failed");
             const result = await res.json();
             const raw = typeof result === "string" ? result : (result.data || result.text || JSON.stringify(result));
             const jsonMatch = raw.match(/\{[\s\S]*\}/);
             if (jsonMatch) {
-                const parsed = JSON.parse(jsonMatch[0]);
+                const parsed = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
+                const videoUrl = video.hls?.videoUrl?.trim() || "";
+                if (video?.id) {
+                    try {
+                        const sem = await fetch("/api/adInventoryIabSemantic", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                videoUrl: videoUrl || undefined,
+                                videoId: video.id,
+                                categoryKey,
+                            }),
+                        });
+                        if (sem.ok) {
+                            const semJson = (await sem.json()) as Record<string, unknown>;
+                            const iab = Array.isArray(semJson.iab) ? semJson.iab : [];
+                            parsed.iab = iab;
+                            if (Array.isArray(semJson.iabTopTier1)) parsed.iabTopTier1 = semJson.iabTopTier1;
+                            if (Array.isArray(semJson.iabTopTier2)) parsed.iabTopTier2 = semJson.iabTopTier2;
+                            if (Array.isArray(semJson.iabTopTier3)) parsed.iabTopTier3 = semJson.iabTopTier3;
+                            if (Array.isArray(semJson.iabTopTier4)) parsed.iabTopTier4 = semJson.iabTopTier4;
+                        } else {
+                            console.warn("Semantic IAB request failed:", await sem.text());
+                        }
+                    } catch (semErr) {
+                        console.warn("Semantic IAB error:", semErr);
+                    }
+                }
+                if (gen !== analysisGenerationRef.current) return;
                 setAnalysis(normalizeAnalysis(parsed, categoryKey));
             } else {
                 throw new Error("Could not parse");
             }
         } catch (err) {
             console.error("Analysis error:", err);
+            if (gen !== analysisGenerationRef.current) return;
             setAnalysis({
                 summary: "Analysis could not be completed. Try refreshing.",
                 company: "Unknown", proposedTitle: "Ad Video",
@@ -444,14 +463,28 @@ export default function AdVideoDetailPage() {
                 iabTopTier1: [],
                 iabTopTier2: [],
                 iabTopTier3: [],
+                iabTopTier4: [],
                 iabCodes: [],
                 iabConfidence: "0.000",
                 iabFallbackApplied: true,
                 iabFallbackReason: "Analysis failed; no model output available.",
                 iabRawCandidates: [],
+                iabPolicyDiagnostics: {
+                    rawArrayLength: 0,
+                    normalizedCount: 0,
+                    maxConfidence: 0,
+                    minConfidence: 0,
+                    highBandCount: 0,
+                    mediumBandCount: 0,
+                    thresholds: { high: 0.75, medium: 0.4 },
+                    effectiveSource: "fallback_empty",
+                },
             });
+        } finally {
+            if (gen === analysisGenerationRef.current) {
+                setAnalysisLoading(false);
+            }
         }
-        setAnalysisLoading(false);
     }, [video, slug]);
 
     useEffect(() => { if (video) runAnalysis(); }, [video, runAnalysis]);
@@ -663,6 +696,7 @@ export default function AdVideoDetailPage() {
             vw_iab_t1: (analysis.iabTopTier1 || []).join(","),
             vw_iab_t2: (analysis.iabTopTier2 || []).join(","),
             vw_iab_t3: (analysis.iabTopTier3 || []).join(","),
+            vw_iab_t4: (analysis.iabTopTier4 || []).join(","),
             vw_iab_codes: (analysis.iabCodes || []).join(","),
             vw_iab_conf: analysis.iabConfidence || "0.000",
         },
@@ -746,6 +780,23 @@ export default function AdVideoDetailPage() {
                     </div>
                 </div>
             </header>
+
+            {analysisLoading && (
+                <div className="px-8 pb-4" role="status" aria-live="polite">
+                    <div className="flex items-start gap-3 rounded-xl border border-border-light bg-gray-50 px-4 py-3">
+                        <div
+                            className="mt-0.5 h-5 w-5 shrink-0 rounded-full border-2 border-mb-green-dark border-t-transparent animate-spin"
+                            aria-hidden
+                        />
+                        <div>
+                            <p className="text-sm font-semibold text-text-primary">Analyzing this ad video</p>
+                            <p className="text-xs text-text-secondary mt-1 leading-relaxed max-w-3xl">
+                                Running Pegasus text analysis and semantic IAB taxonomy matching (TwelveLabs async segmentation plus OpenAI embeddings). This often takes a few minutes. You can watch the creative below while results stream in.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             <div className="px-8 py-6 space-y-8">
                 <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
@@ -1273,10 +1324,13 @@ export default function AdVideoDetailPage() {
                         <div className="mb-4 rounded-xl border border-border-light p-4 bg-gray-50/50 space-y-4">
                             <div>
                                 <h3 className="text-xs font-semibold uppercase tracking-[1.5px] text-text-secondary mb-2">IAB Taxonomy (Normalized)</h3>
-                                {analysis?.iab?.length ? (
+                                {analysis &&
+                                ((analysis.iab?.length ?? 0) > 0 ||
+                                    (analysis.iabRawCandidates?.length ?? 0) > 0 ||
+                                    (analysis.iabTopTier1?.length ?? 0) > 0) ? (
                                     <div className="space-y-3">
                                         <p className="text-[11px] text-text-tertiary">
-                                            Taxonomies are generated by Pegasus and reference IAB Tech Lab taxonomies from{" "}
+                                            IAB classes use Pegasus 1.5 time-based scene descriptions, OpenAI text embeddings, and cosine match against a Content Taxonomy 3.1 vector index (`taxonomy_embeds.json`: each row’s `iab_id` is the CT31 node id). Tiers and codes come from the matched taxonomy breadcrumb, not the legacy demo closed set. Reference:{" "}
                                             <a
                                                 href="https://github.com/InteractiveAdvertisingBureau/Taxonomies/tree/develop"
                                                 target="_blank"
@@ -1318,9 +1372,66 @@ export default function AdVideoDetailPage() {
                                                 ))}
                                             </div>
                                         )}
+                                        {(analysis.iabTopTier4 || []).length > 0 && (
+                                            <div className="flex flex-wrap gap-1.5">
+                                                <span className="px-2.5 py-1 rounded-full bg-teal-100 text-[11px] font-semibold text-teal-900 border border-teal-200">
+                                                    Tier 4
+                                                </span>
+                                                {(analysis.iabTopTier4 || []).map((tier4) => (
+                                                    <span key={tier4} className="px-2.5 py-1 rounded-full bg-white text-[11px] font-medium text-text-secondary border border-border-light">
+                                                        {tier4}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        )}
                                         <p className="text-[11px] text-text-tertiary">
                                             Mean confidence: <span className="font-semibold text-text-secondary">{analysis.iabConfidence}</span>
                                         </p>
+                                        <div className="space-y-2">
+                                            <p className="text-[11px] font-semibold text-text-secondary uppercase tracking-wide">Content Taxonomy 3.1 node IDs</p>
+                                            <p className="text-[10px] text-text-tertiary">
+                                                Union of ids on normalized rows and raw semantic rows (dedupe can keep one row per key).
+                                            </p>
+                                            {(() => {
+                                                const ids = collectUniqueTaxonomy31NodeIds(analysis.iab || [], analysis.iabRawCandidates || []);
+                                                if (ids.length === 0) {
+                                                    return (
+                                                        <p className="text-[11px] font-mono text-text-tertiary border border-dashed border-border-light rounded-lg px-2 py-1.5 bg-gray-50/80">
+                                                            No CT 3.1 node ids in this pass (e.g. deterministic fallback only).
+                                                        </p>
+                                                    );
+                                                }
+                                                return (
+                                                    <div className="flex flex-wrap gap-1.5 font-mono text-[11px]">
+                                                        {ids.map((id) => (
+                                                            <span
+                                                                key={id}
+                                                                className="px-2 py-1 rounded border border-indigo-200 bg-indigo-50/90 text-indigo-900 font-medium"
+                                                            >
+                                                                {id}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                );
+                                            })()}
+                                            {(analysis.iab || []).length > 0 && (
+                                                <div className="rounded-lg border border-border-light bg-gray-50/50 overflow-hidden">
+                                                    <p className="text-[10px] font-semibold text-text-secondary uppercase tracking-wide px-2 py-1 border-b border-border-light bg-white">
+                                                        Per normalized row
+                                                    </p>
+                                                    <ul className="divide-y divide-border-light text-[11px] font-mono">
+                                                        {(analysis.iab || []).map((row, idx) => (
+                                                            <li key={`${row.code}-${idx}`} className="px-2 py-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-text-secondary">
+                                                                <span className="text-text-primary font-sans font-medium">{row.tier1} / {row.tier2}{row.tier3 ? ` / ${row.tier3}` : ""}</span>
+                                                                <span className="text-indigo-800">CT31: {row.taxonomyNodeId != null && String(row.taxonomyNodeId).trim() ? String(row.taxonomyNodeId) : "—"}</span>
+                                                                <span>code {row.code}</span>
+                                                                <span>{Math.round(row.confidence * 100)}%</span>
+                                                            </li>
+                                                        ))}
+                                                    </ul>
+                                                </div>
+                                            )}
+                                        </div>
                                     </div>
                                 ) : (
                                     <p className="text-xs text-text-tertiary">No IAB classes available for this analysis yet. Payload falls back to deterministic category mapping.</p>
@@ -1330,17 +1441,32 @@ export default function AdVideoDetailPage() {
                                 <h3 className="text-xs font-semibold uppercase tracking-[1.5px] text-text-secondary mb-2">Classification QA</h3>
                                 <div className="space-y-2 text-[11px]">
                                     <p className="text-text-secondary">
-                                        Fallback applied: <span className="font-semibold">{analysis?.iabFallbackApplied ? "Yes" : "No"}</span>
+                                        Deterministic fallback applied: <span className="font-semibold">{analysis?.iabFallbackApplied ? "Yes" : "No"}</span>
                                     </p>
-                                    {analysis?.iabFallbackReason && (
+                                    {!analysis?.iabFallbackApplied && analysis?.iabFallbackReason && (
+                                        <p className="text-text-tertiary">
+                                            <span className="font-medium text-text-secondary">Band note: </span>
+                                            {analysis.iabFallbackReason}
+                                        </p>
+                                    )}
+                                    {analysis?.iabFallbackApplied && analysis?.iabFallbackReason && (
                                         <p className="text-text-tertiary">{analysis.iabFallbackReason}</p>
+                                    )}
+                                    {analysis?.iabPolicyDiagnostics && (
+                                        <details className="mt-1">
+                                            <summary className="cursor-pointer text-text-secondary font-medium">Policy diagnostics (console: [IAB policy])</summary>
+                                            <pre className="mt-2 p-2 rounded-lg bg-white border border-border-light text-[10px] overflow-x-auto text-text-secondary whitespace-pre-wrap">
+                                                {JSON.stringify(analysis.iabPolicyDiagnostics, null, 2)}
+                                            </pre>
+                                        </details>
                                     )}
                                     <details>
                                         <summary className="cursor-pointer text-text-secondary font-medium">Raw model candidates ({analysis?.iabRawCandidates?.length || 0})</summary>
                                         <div className="mt-2 flex flex-wrap gap-1.5">
                                             {(analysis?.iabRawCandidates || []).map((item, idx) => (
                                                 <span key={`${item.tier1}-${item.tier2}-${idx}`} className="px-2 py-1 rounded border border-border-light bg-white text-text-secondary">
-                                                    {item.tier1} / {item.tier2}{item.tier3 ? ` / ${item.tier3}` : ""} {item.code ? `(${item.code})` : ""} · {Math.round(item.confidence * 100)}%
+                                                    {item.tier1} / {item.tier2}{item.tier3 ? ` / ${item.tier3}` : ""}{item.tier4 ? ` / ${item.tier4}` : ""} {item.code ? `(${item.code})` : ""}
+                                                    {item.taxonomyNodeId ? ` · CT31:${item.taxonomyNodeId}` : ""} · {Math.round(item.confidence * 100)}%
                                                 </span>
                                             ))}
                                         </div>

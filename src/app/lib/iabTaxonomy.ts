@@ -176,19 +176,34 @@ export const IAB_ALLOWED_ROWS: readonly AllowedIabRow[] = [
   },
 ];
 
+/** Why `fallbackApplied` / which band selected — for debugging UI and logs. */
+export type IabPolicyDiagnostics = {
+  rawArrayLength: number;
+  normalizedCount: number;
+  maxConfidence: number;
+  minConfidence: number;
+  highBandCount: number;
+  mediumBandCount: number;
+  thresholds: { high: number; medium: number };
+  effectiveSource: "high" | "medium" | "fallback_rows" | "fallback_empty" | "semantic_direct";
+};
+
 export type IabPolicyResult = {
   normalizedItems: IabTaxonomyItem[];
   effectiveTier1: string[];
   effectiveTier2: string[];
   effectiveTier3: string[];
+  effectiveTier4: string[];
   effectiveCodes: string[];
   averageConfidence: number;
   fallbackApplied: boolean;
   fallbackReason: string | null;
+  diagnostics: IabPolicyDiagnostics;
 };
 
 const IAB_HIGH_CONFIDENCE = 0.75;
-const IAB_MEDIUM_CONFIDENCE = 0.5;
+/** Cosine→confidence mapping for semantic hits often lands 0.4–0.55; 0.5 was too strict and forced fallback every time. */
+const IAB_MEDIUM_CONFIDENCE = 0.4;
 
 const FALLBACK_BY_CATEGORY_KEY: Record<string, IabTaxonomyItem[]> = {
   alcohol_premium: [{ tier1: "Alcohol", tier2: "Spirits", code: "1005", confidence: 0.4 }],
@@ -201,6 +216,78 @@ const FALLBACK_BY_CATEGORY_KEY: Record<string, IabTaxonomyItem[]> = {
 
 function norm(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+/**
+ * Split a Content Taxonomy 3.1-style breadcrumb (`"A > B > C > D"`) into up to four tier labels.
+ * Deeper paths join remaining segments into `tier4` so a fifth level is not dropped silently.
+ */
+export function parseTaxonomy31Breadcrumb(breadcrumb: string): {
+  tier1: string;
+  tier2: string;
+  tier3?: string;
+  tier4?: string;
+} {
+  const parts = String(breadcrumb ?? "")
+    .split(">")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (parts.length === 0) return { tier1: "", tier2: "" };
+  if (parts.length === 1) return { tier1: parts[0], tier2: parts[0] };
+  if (parts.length === 2) return { tier1: parts[0], tier2: parts[1] };
+  if (parts.length === 3) return { tier1: parts[0], tier2: parts[1], tier3: parts[2] };
+  return {
+    tier1: parts[0],
+    tier2: parts[1],
+    tier3: parts[2],
+    tier4: parts.length > 4 ? parts.slice(3).join(" / ") : parts[3],
+  };
+}
+
+/** Coerce IAB rows from stored JSON / APIs into `IabTaxonomyItem` (tier strings, confidence, CT31 id). */
+export function normalizeIabItemsFromUnknown(input: unknown): IabTaxonomyItem[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((item): IabTaxonomyItem | null => {
+      if (!item || typeof item !== "object") return null;
+      const record = item as Record<string, unknown>;
+      const tier1 = typeof record.tier1 === "string" ? record.tier1.trim() : "";
+      const tier2 = typeof record.tier2 === "string" ? record.tier2.trim() : "";
+      const tier3 = typeof record.tier3 === "string" ? record.tier3.trim() : "";
+      const tier4 = typeof record.tier4 === "string" ? record.tier4.trim() : "";
+      const code = typeof record.code === "string" ? record.code.trim() : "";
+      const rawTaxonomyId = record.taxonomyNodeId;
+      const taxonomyNodeId =
+        typeof rawTaxonomyId === "string"
+          ? rawTaxonomyId.trim()
+          : rawTaxonomyId != null && String(rawTaxonomyId).trim()
+            ? String(rawTaxonomyId).trim()
+            : "";
+      let confidence = 0;
+      if (typeof record.confidence === "number" && !Number.isNaN(record.confidence)) {
+        confidence = Math.max(0, Math.min(1, record.confidence));
+      } else if (typeof record.confidence === "string" && record.confidence.trim()) {
+        const p = parseFloat(record.confidence);
+        if (!Number.isNaN(p)) confidence = Math.max(0, Math.min(1, p));
+      }
+      if (!tier1 || !tier2) return null;
+      return {
+        tier1,
+        tier2,
+        tier3: tier3 || undefined,
+        tier4: tier4 || undefined,
+        code,
+        confidence,
+        ...(taxonomyNodeId ? { taxonomyNodeId } : {}),
+      };
+    })
+    .filter((v): v is IabTaxonomyItem => v !== null);
+}
+
+/** Copy of category fallbacks for callers that need a deterministic row outside `normalizeIabWithPolicy`. */
+export function getCategoryFallbackIabRows(categoryKey: string): IabTaxonomyItem[] {
+  const rows = FALLBACK_BY_CATEGORY_KEY[categoryKey];
+  return rows ? rows.map((r) => ({ ...r })) : [];
 }
 
 /** JSON block injected into the analyze prompt */
@@ -256,8 +343,20 @@ function snapCandidateToAllowedRow(candidate: IabCandidate): IabTaxonomyItem | n
   const tier1 = typeof candidate.tier1 === "string" ? candidate.tier1.trim() : "";
   const tier2 = typeof candidate.tier2 === "string" ? candidate.tier2.trim() : "";
   const tier3 = typeof candidate.tier3 === "string" ? candidate.tier3.trim() : "";
+  const tier4 = typeof candidate.tier4 === "string" ? candidate.tier4.trim() : "";
+  const taxonomyNodeIdRaw = candidate.taxonomyNodeId;
+  const taxonomyNodeId =
+    typeof taxonomyNodeIdRaw === "string"
+      ? taxonomyNodeIdRaw.trim()
+      : taxonomyNodeIdRaw != null && String(taxonomyNodeIdRaw).trim()
+        ? String(taxonomyNodeIdRaw).trim()
+        : "";
   const code = typeof candidate.code === "string" ? candidate.code.trim().toUpperCase() : "";
   const confidence = clampConfidence(candidate.confidence);
+  const passExtras = {
+    ...(tier4 ? { tier4 } : {}),
+    ...(taxonomyNodeId ? { taxonomyNodeId } : {}),
+  };
 
   const n1 = norm(tier1);
   const n2 = norm(tier2);
@@ -269,24 +368,24 @@ function snapCandidateToAllowedRow(candidate: IabCandidate): IabTaxonomyItem | n
     (r) => norm(r.tier1) === n1 && norm(r.tier2) === n2 && norm(r.tier3 || "") === n3
   );
   if (exact) {
-    return { tier1: exact.tier1, tier2: exact.tier2, tier3: exact.tier3, code: exact.code, confidence };
+    return { tier1: exact.tier1, tier2: exact.tier2, tier3: exact.tier3, code: exact.code, confidence, ...passExtras };
   }
 
   const byT2 = IAB_ALLOWED_ROWS.filter((r) => norm(r.tier2) === n2);
   if (byT2.length === 1) {
     const r = byT2[0];
-    return { tier1: r.tier1, tier2: r.tier2, tier3: r.tier3, code: r.code, confidence };
+    return { tier1: r.tier1, tier2: r.tier2, tier3: r.tier3, code: r.code, confidence, ...passExtras };
   }
 
   if (code) {
     const byCode = IAB_ALLOWED_ROWS.filter((r) => r.code.toUpperCase() === code);
     if (byCode.length === 1) {
       const r = byCode[0];
-      return { tier1: r.tier1, tier2: r.tier2, tier3: r.tier3, code: r.code, confidence };
+      return { tier1: r.tier1, tier2: r.tier2, tier3: r.tier3, code: r.code, confidence, ...passExtras };
     }
     if (byCode.length > 1 && (n2 || n3)) {
       const hit = byCode.find((r) => norm(r.tier2) === n2 && norm(r.tier3 || "") === n3);
-      if (hit) return { tier1: hit.tier1, tier2: hit.tier2, tier3: hit.tier3, code: hit.code, confidence };
+      if (hit) return { tier1: hit.tier1, tier2: hit.tier2, tier3: hit.tier3, code: hit.code, confidence, ...passExtras };
     }
   }
 
@@ -298,24 +397,102 @@ function snapCandidateToAllowedRow(candidate: IabCandidate): IabTaxonomyItem | n
     }
     if (matchedRows.length === 1) {
       const r = matchedRows[0];
-      return { tier1: r.tier1, tier2: r.tier2, tier3: r.tier3, code: r.code, confidence };
+      return { tier1: r.tier1, tier2: r.tier2, tier3: r.tier3, code: r.code, confidence, ...passExtras };
     }
     if (matchedRows.length > 1) {
       const prefer =
         matchedRows.find((r) => norm(r.tier3 || "") === n3) ||
         matchedRows.find((r) => norm(r.tier2) === n2) ||
         matchedRows[0];
-      return { tier1: prefer.tier1, tier2: prefer.tier2, tier3: prefer.tier3, code: prefer.code, confidence };
+      return { tier1: prefer.tier1, tier2: prefer.tier2, tier3: prefer.tier3, code: prefer.code, confidence, ...passExtras };
     }
   }
 
   return null;
 }
 
+/** Dedupe embedding-matched taxonomy rows by `taxonomyNodeId` (same as `iab_id` in taxonomy_embeds.json). */
+function dedupeSemanticTaxonomyItems(items: IabTaxonomyItem[]): IabTaxonomyItem[] {
+  const m = new Map<string, IabTaxonomyItem>();
+  for (const item of items) {
+    const key = (item.taxonomyNodeId && String(item.taxonomyNodeId).trim()) || item.code;
+    if (!key) continue;
+    const prior = m.get(key);
+    if (!prior || item.confidence > prior.confidence) m.set(key, item);
+  }
+  return [...m.values()].sort((a, b) => {
+    if (b.confidence !== a.confidence) return b.confidence - a.confidence;
+    return a.tier1.localeCompare(b.tier1);
+  });
+}
+
+/** True when every normalized row came from taxonomy_embeds cosine match (`taxonomyNodeId` / `iab_id`). */
+export function isSemanticDirectTaxonomyPayload(rawInput: unknown): boolean {
+  const items = normalizeIabItemsFromUnknown(rawInput);
+  if (items.length === 0) return false;
+  return items.every((item) => item.taxonomyNodeId != null && String(item.taxonomyNodeId).trim().length > 0);
+}
+
+/**
+ * Lightweight finalize for rows already aligned to Content Taxonomy 3.1 (`taxonomy_embeds.json`):
+ * each item should carry `taxonomyNodeId` (= `iab_id`) and tier labels from the node breadcrumb.
+ * No snapping to the demo `IAB_ALLOWED_ROWS` set and no high/medium/fallback bands.
+ */
+export function finalizeSemanticTaxonomyIab(rawInput: unknown): IabPolicyResult {
+  const rawItems = Array.isArray(rawInput) ? rawInput : [];
+  const candidates = normalizeIabItemsFromUnknown(rawInput);
+  const normalizedItems = dedupeSemanticTaxonomyItems(candidates);
+  const effectiveItems = normalizedItems;
+
+  const effectiveTier1 = [...new Set(effectiveItems.map((item) => item.tier1))];
+  const effectiveTier2 = effectiveItems.length > 0 ? [...new Set(effectiveItems.map((item) => item.tier2))] : [];
+  const effectiveTier3 = effectiveItems.length > 0
+    ? [...new Set(effectiveItems.map((item) => item.tier3).filter((t): t is string => Boolean(t)))]
+    : [];
+  const effectiveTier4 = effectiveItems.length > 0
+    ? [...new Set(effectiveItems.map((item) => item.tier4).filter((t): t is string => Boolean(t)))]
+    : [];
+  const effectiveCodes = effectiveItems.length > 0
+    ? [...new Set(effectiveItems.map((item) => item.code).filter(Boolean))]
+    : [];
+
+  const averageConfidence = normalizedItems.length > 0
+    ? normalizedItems.reduce((sum, item) => sum + item.confidence, 0) / normalizedItems.length
+    : 0;
+
+  const confidences = normalizedItems.map((i) => i.confidence);
+  const diagnostics: IabPolicyDiagnostics = {
+    rawArrayLength: rawItems.length,
+    normalizedCount: normalizedItems.length,
+    maxConfidence: confidences.length ? Math.max(...confidences) : 0,
+    minConfidence: confidences.length ? Math.min(...confidences) : 0,
+    highBandCount: normalizedItems.length,
+    mediumBandCount: 0,
+    thresholds: { high: IAB_HIGH_CONFIDENCE, medium: IAB_MEDIUM_CONFIDENCE },
+    effectiveSource: "semantic_direct",
+  };
+
+  return {
+    normalizedItems,
+    effectiveTier1,
+    effectiveTier2,
+    effectiveTier3,
+    effectiveTier4,
+    effectiveCodes,
+    averageConfidence,
+    fallbackApplied: normalizedItems.length === 0,
+    fallbackReason:
+      normalizedItems.length === 0
+        ? "No semantic taxonomy rows after dedupe (check taxonomy_embeds coverage and scene matches)."
+        : null,
+    diagnostics,
+  };
+}
+
 function dedupeAndSort(items: IabTaxonomyItem[]): IabTaxonomyItem[] {
   const deduped = new Map<string, IabTaxonomyItem>();
   for (const item of items) {
-    const key = `${item.code}|${item.tier1}|${item.tier2}|${item.tier3 || ""}`;
+    const key = `${item.code}|${item.tier1}|${item.tier2}|${item.tier3 || ""}|${item.tier4 || ""}|${item.taxonomyNodeId || ""}`;
     const prior = deduped.get(key);
     if (!prior || item.confidence > prior.confidence) deduped.set(key, item);
   }
@@ -343,44 +520,67 @@ export function normalizeIabWithPolicy(
   let effectiveItems: IabTaxonomyItem[] = [];
   let fallbackApplied = false;
   let fallbackReason: string | null = null;
+  let effectiveSource: IabPolicyDiagnostics["effectiveSource"] = "fallback_empty";
 
   if (high.length > 0) {
     effectiveItems = high;
+    effectiveSource = "high";
   } else if (medium.length > 0) {
     effectiveItems = medium;
-    fallbackReason = "No high-confidence Tier-2 classes; using Tier-1-only confidence band.";
+    effectiveSource = "medium";
+    fallbackReason =
+      "No high-confidence classes (≥ " +
+      IAB_HIGH_CONFIDENCE +
+      "); using medium band (≥ " +
+      IAB_MEDIUM_CONFIDENCE +
+      ") for OpenRTB tier fields.";
   } else {
     const fallback = (categoryKey && FALLBACK_BY_CATEGORY_KEY[categoryKey]) || [];
     effectiveItems = fallback;
     fallbackApplied = true;
+    effectiveSource = fallback.length ? "fallback_rows" : "fallback_empty";
     fallbackReason = fallback.length
-      ? "No medium-confidence model classes; applied deterministic category fallback."
-      : "No medium-confidence model classes and no category fallback mapping found.";
+      ? "No items met the medium confidence threshold; applied deterministic category fallback."
+      : "No normalized IAB rows and no category fallback mapping for this vertical key.";
   }
 
   const effectiveTier1 = [...new Set(effectiveItems.map((item) => item.tier1))];
-  const effectiveTier2 = high.length > 0
-    ? [...new Set(effectiveItems.map((item) => item.tier2))]
-    : [];
-  const effectiveTier3 = high.length > 0
+  const showRichTiers = effectiveItems.length > 0;
+  const effectiveTier2 = showRichTiers ? [...new Set(effectiveItems.map((item) => item.tier2))] : [];
+  const effectiveTier3 = showRichTiers
     ? [...new Set(effectiveItems.map((item) => item.tier3).filter((tier3): tier3 is string => Boolean(tier3)))]
     : [];
-  const effectiveCodes = high.length > 0
-    ? [...new Set(effectiveItems.map((item) => item.code).filter(Boolean))]
+  const effectiveTier4 = showRichTiers
+    ? [...new Set(effectiveItems.map((item) => item.tier4).filter((tier4): tier4 is string => Boolean(tier4)))]
     : [];
+  const effectiveCodes = showRichTiers ? [...new Set(effectiveItems.map((item) => item.code).filter(Boolean))] : [];
 
   const averageConfidence = normalizedItems.length > 0
     ? normalizedItems.reduce((sum, item) => sum + item.confidence, 0) / normalizedItems.length
     : 0;
+
+  const confidences = normalizedItems.map((i) => i.confidence);
+  const diagnostics: IabPolicyDiagnostics = {
+    rawArrayLength: rawItems.length,
+    normalizedCount: normalizedItems.length,
+    maxConfidence: confidences.length ? Math.max(...confidences) : 0,
+    minConfidence: confidences.length ? Math.min(...confidences) : 0,
+    highBandCount: high.length,
+    mediumBandCount: medium.length,
+    thresholds: { high: IAB_HIGH_CONFIDENCE, medium: IAB_MEDIUM_CONFIDENCE },
+    effectiveSource,
+  };
 
   return {
     normalizedItems,
     effectiveTier1,
     effectiveTier2,
     effectiveTier3,
+    effectiveTier4,
     effectiveCodes,
     averageConfidence,
     fallbackApplied,
     fallbackReason,
+    diagnostics,
   };
 }
