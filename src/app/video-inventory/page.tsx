@@ -4,6 +4,8 @@ import { useState, useRef, useEffect, useMemo } from "react";
 import { useVideos } from "../lib/videoCache";
 import VideoInventoryUploadModal from "../components/VideoInventoryUploadModal";
 import VideoCard from "../components/VideoCard";
+import ScrollFadeUp from "../components/ScrollFadeUp";
+import ScrollProgressBar from "../components/ScrollProgressBar";
 import Link from "next/link";
 
 const genres = [
@@ -120,6 +122,9 @@ export default function VideoInventoryPage() {
 
     return (
         <div className="min-h-screen bg-white">
+            <ScrollProgressBar />
+
+            <ScrollFadeUp order={0}>
             <header className="border-b border-border-light px-8 py-6 flex justify-between items-start">
                 <div>
                     <h1 className="text-[32px] font-bold tracking-[-1.5px] text-text-primary">
@@ -137,7 +142,9 @@ export default function VideoInventoryPage() {
                     Upload Videos
                 </button>
             </header>
+            </ScrollFadeUp>
 
+            <ScrollFadeUp order={1}>
             {/* ── Search + Genre Filter ─────────────────────────── */}
             <div className="px-8 pt-6 pb-2">
                 <div className="flex items-center justify-between gap-4">
@@ -267,7 +274,9 @@ export default function VideoInventoryPage() {
                     </div>
                 </div>
             </div>
+            </ScrollFadeUp>
 
+            <ScrollFadeUp order={2}>
             {/* ── Content Grid ─────────────────────────────────── */}
             <main className="px-8 pb-12">
                 {/* ── Currently Indexing Banner ──────────────────────── */}
@@ -423,6 +432,7 @@ export default function VideoInventoryPage() {
                     </div>
                 )}
             </main>
+            </ScrollFadeUp>
 
             <VideoInventoryUploadModal
                 open={showUploadModal}

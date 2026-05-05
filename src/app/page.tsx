@@ -1,5 +1,8 @@
 "use client";
 
+import ScrollFadeUp from "./components/ScrollFadeUp";
+import ScrollProgressBar from "./components/ScrollProgressBar";
+
 /* ── Divider ────────────────────────────────────────────── */
 function Divider() {
   return (
@@ -46,25 +49,54 @@ function FeatureCard({ title, description, icon, iconBg }: { title: string; desc
 }
 
 /* ── Code snippets ──────────────────────────────────────── */
-const snippets = [
+const snippets: {
+  step: string;
+  title: string;
+  description: string;
+  filename: string;
+  language: string;
+  code: string;
+  resourceLinks?: { href: string; label: string }[];
+}[] = [
   {
     step: "1",
-    title: "Scene Analysis with Pegasus",
+    title: "Pegasus 1.5 Scene Classification and Content Taxonomy 3.1",
     description:
-      "Every video is analyzed by TwelveLabs' Pegasus model to produce structured, time-stamped scene metadata — sentiment, tone, environment, suitable ad categories, and GARM brand-safety flags.",
-    filename: "api/analyze/route.js",
+      "Ad semantic IAB uses TwelveLabs Pegasus 1.5 in time-based mode: a `scene_classification` segment returns a short `scene_description` per time range. Each description is embedded with OpenAI `text-embedding-3-small` and compared (cosine similarity) to every node in the taxonomy embedding database — a k-nearest style pass that keeps the top candidates per scene and maps the best match to the exact Content Taxonomy 3.1 node id (`iab_id` in the JSON, surfaced as `taxonomyNodeId` in the API). Results are cached to Vercel Blob.",
+    filename: "api/adInventoryIabSemantic/route.js",
     language: "javascript",
-    code: `const res = await tl_client.generate.text(videoId, {
-  prompt: \`Analyze each scene segment and return JSON with:
-  - scene_context, sentiment, tone, environment
-  - ad_suitability: { suitable_categories, unsuitable_categories }
-  - brand_safety: { garm_flags, risk_level }
-  - ad_break_fitness: { interruption_risk, break_quality, score }
-  Return a complete JSON array over the full timeline.\`
+    code: `const created = await tlClient.analyzeAsync.tasks.create({
+  modelName: "pegasus1.5",
+  video: resolvedVideo.video,
+  analysisMode: "time_based_metadata",
+  responseFormat: {
+    type: "segment_definitions",
+    segmentDefinitions: [{
+      id: "scene_classification",
+      fields: [{ name: "scene_description", type: "string", /* ... */ }],
+    }],
+  },
+  minSegmentDuration: 5,
+  maxSegmentDuration: 30,
 });
-
-// Cached to Vercel Blob for instant re-use
-await put(\`analysis_v3_\${videoId}.json\`, JSON.stringify(parsed));`,
+// Per scene: OpenAI text-embedding-3-small → cosine vs taxonomy_embeds.json
+// Best node.iab_id = exact CT 3.1 id; topK=5 for taxonomyTopCandidates
+const score = cosineSimilarity(sceneEmbedding, node.embedding);
+pushTopCosine(taxonomyTopCandidates, { iab_id, breadcrumb, cosine_similarity: score }, 5);`,
+    resourceLinks: [
+      {
+        label: "taxonomy_embeds.json (embedding database, repo root)",
+        href: "https://github.com/nathanchess/twelvelabs-context-ad-engine/blob/main/taxonomy_embeds.json",
+      },
+      {
+        label: "IAB Content Taxonomy (standards and 3.1 reference)",
+        href: "https://iabtechlab.com/standards/content-taxonomy/",
+      },
+      {
+        label: "IAB Taxonomies repository (GitHub)",
+        href: "https://github.com/InteractiveAdvertisingBureau/Taxonomies",
+      },
+    ],
   },
   {
     step: "2",
@@ -149,9 +181,9 @@ const whyRows = [
     icon: (
       <svg viewBox="0 0 16 16" fill="none" className="w-5 h-5"><path d="M2 13l4-8 3 5 2-3 3 6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" /></svg>
     ),
-    name: "Pegasus 1.2 — Generative Video Understanding",
+    name: "Pegasus 1.5 — Generative Video Understanding",
     description:
-      "Generates structured scene metadata (sentiment, tone, environment, GARM flags, suitable ad categories) with frame-level accuracy — the foundation of every ad break decision.",
+      "Drives time-based scene classification and metadata (including semantic Content Taxonomy 3.1 alignment via OpenAI embeddings) — a core input to ad break and IAB labeling in this app.",
   },
   {
     icon: (
@@ -181,7 +213,9 @@ const ARCHITECTURE_LUCIDCHART_URL =
 export default function Home() {
   return (
     <div className="min-h-screen bg-white">
+      <ScrollProgressBar />
 
+      <ScrollFadeUp order={0}>
       {/* ── Hero ──────────────────────────────────────────── */}
       <section className="px-8 pt-12 pb-10 max-w-[1200px] mx-auto">
 
@@ -284,7 +318,9 @@ export default function Home() {
           </a>
         </div>
       </section>
+      </ScrollFadeUp>
 
+      <ScrollFadeUp order={1}>
       {/* ── Problem Statement ─────────────────────────────── */}
       <section className="px-8 py-12 max-w-[1200px] mx-auto">
         <h2 className="text-[28px] font-bold tracking-[-1px] text-gray-900 mb-4">
@@ -302,7 +338,9 @@ export default function Home() {
           can match ads to moments that amplify rather than interrupt the viewer experience.
         </p>
       </section>
+      </ScrollFadeUp>
 
+      <ScrollFadeUp order={2}>
       {/* ── Stats row ─────────────────────────────────────── */}
       <section className="px-8 pb-10 max-w-[1200px] mx-auto">
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -387,9 +425,11 @@ export default function Home() {
           ))}
         </div>
       </section>
+      </ScrollFadeUp>
 
       <Divider />
 
+      <ScrollFadeUp order={3}>
       {/* ── Core Features ─────────────────────────────────── */}
       <section className="px-8 py-4 pb-12 max-w-[1200px] mx-auto">
         <h2 className="text-[28px] font-bold tracking-[-1px] text-gray-900 mb-2">Core Features</h2>
@@ -452,14 +492,16 @@ export default function Home() {
           />
         </div>
       </section>
+      </ScrollFadeUp>
 
       <Divider />
 
+      <ScrollFadeUp order={4}>
       {/* ── How It Works ──────────────────────────────────── */}
       <section className="px-8 py-4 pb-12 max-w-[1200px] mx-auto">
         <h2 className="text-[28px] font-bold tracking-[-1px] text-gray-900 mb-2">How It Works</h2>
         <p className="text-[15px] text-gray-500 mb-10">
-          Three core steps from raw footage to ranked, diverse ad placement.
+          Four core steps from raw footage to ranked, diverse ad placement.
         </p>
 
         <div className="flex flex-col gap-12">
@@ -474,15 +516,33 @@ export default function Home() {
                 </span>
                 <h3 className="text-[18px] font-semibold text-gray-900">{s.title}</h3>
               </div>
-              <p className="text-[15px] text-gray-500 leading-relaxed mb-6 ml-10">{s.description}</p>
+              <p className="text-[15px] text-gray-500 leading-relaxed mb-4 ml-10">{s.description}</p>
+              {s.resourceLinks && s.resourceLinks.length > 0 ? (
+                <ul className="list-disc pl-14 pr-4 mb-6 text-[14px] text-gray-500 space-y-1.5">
+                  {s.resourceLinks.map((link) => (
+                    <li key={link.href}>
+                      <a
+                        href={link.href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-gray-700 font-medium hover:text-gray-900 underline decoration-gray-300 underline-offset-2"
+                      >
+                        {link.label}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
               <CodeBlock filename={s.filename} language={s.language} code={s.code} />
             </div>
           ))}
         </div>
       </section>
+      </ScrollFadeUp>
 
       <Divider />
 
+      <ScrollFadeUp order={5}>
       {/* ── Why TwelveLabs ────────────────────────────────── */}
       <section className="px-8 py-4 pb-12 max-w-[1200px] mx-auto">
         <h2 className="text-[28px] font-bold tracking-[-1px] text-gray-900 mb-2">Why TwelveLabs?</h2>
@@ -517,9 +577,11 @@ export default function Home() {
           </a>
         </div>
       </section>
+      </ScrollFadeUp>
 
       <Divider />
 
+      <ScrollFadeUp order={6}>
       {/* ── Business Impact ───────────────────────────────── */}
       <section className="px-8 py-4 pb-12 max-w-[1200px] mx-auto">
         <h2 className="text-[28px] font-bold tracking-[-1px] text-gray-900 mb-2">Business Impact</h2>
@@ -565,9 +627,11 @@ export default function Home() {
           </div>
         </div>
       </section>
+      </ScrollFadeUp>
 
       <Divider />
 
+      <ScrollFadeUp order={7}>
       {/* ── Technology Stack ──────────────────────────────── */}
       <section className="px-8 py-4 pb-12 max-w-[1200px] mx-auto">
         <h2 className="text-[28px] font-bold tracking-[-1px] text-gray-900 mb-8">Technology Stack</h2>
@@ -600,7 +664,9 @@ export default function Home() {
           </table>
         </div>
       </section>
+      </ScrollFadeUp>
 
+      <ScrollFadeUp order={8}>
       {/* ── CTA Banner ────────────────────────────────────── */}
       <section className="px-8 pb-16 max-w-[1200px] mx-auto">
         <div className="rounded-2xl px-8 py-10 text-center" style={{ background: GRAD_WASH, border: "1px solid rgba(217,249,157,0.6)" }}>
@@ -641,7 +707,9 @@ export default function Home() {
           </div>
         </div>
       </section>
+      </ScrollFadeUp>
 
+      <ScrollFadeUp order={9}>
       {/* ── Footer ────────────────────────────────────────── */}
       <footer className="border-t border-[#E5E7EB] px-8 py-6 text-center">
         <p className="text-[12px] text-gray-400">
@@ -656,6 +724,7 @@ export default function Home() {
           </a>
         </p>
       </footer>
+      </ScrollFadeUp>
     </div>
   );
 }

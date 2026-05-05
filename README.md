@@ -38,6 +38,7 @@ A full-stack contextual ad placement engine for broadcast and streaming content.
 - **npm**, yarn, or pnpm
 - A [TwelveLabs account](https://playground.twelvelabs.io/) (free tier works)
 - A [Vercel account](https://vercel.com/) for Blob storage (free tier works)
+- An [OpenAI API key](https://platform.openai.com/api-keys) — required for **semantic IAB / Content Taxonomy 3.1** matching (`text-embedding-3-small` scene embeddings vs `taxonomy_embeds.json`)
 - *(Optional)* A [Databricks workspace](https://databricks.com/) with a running SQL warehouse for Delta Lake export
 
 ### 1. Clone & Install
@@ -89,6 +90,11 @@ TL_AD_INDEX_ID=...
 # Get it from: https://vercel.com/dashboard → Storage → Blob
 BLOB_READ_WRITE_TOKEN=vercel_blob_rw_...
 
+# ── OpenAI (required for semantic Content Taxonomy 3.1 mapping) ──
+# Used by POST /api/adInventoryIabSemantic: embeds each Pegasus 1.5 scene
+# description and runs cosine similarity against taxonomy_embeds.json
+OPENAI_API_KEY=sk-...
+
 # ── Databricks (optional — required only for Delta Lake export) ──
 # Personal access token from Databricks: User Settings → Developer → Access Tokens
 DATABRICKS_TOKEN=dapi...
@@ -107,6 +113,8 @@ DATABRICKS_SCHEMA=default
 ```
 
 > **Note:** All analysis results are cached to Vercel Blob so subsequent page loads are instant. The engine never re-analyzes a video it has already seen.
+
+> **Semantic IAB:** Ad-inventory semantic taxonomy uses **Pegasus 1.5** (`analyzeAsync` with `scene_classification`) plus OpenAI embeddings against a pre-built vector index at the repo root: [`taxonomy_embeds.json`](https://github.com/nathanchess/twelvelabs-context-ad-engine/blob/main/taxonomy_embeds.json) (each row’s `iab_id` is the Content Taxonomy **3.1** node id). Build or refresh that file with `node pegasus_test.js` (see `pegasus_test.js` for the `embed_IAB_DATA` workflow). The canonical taxonomy table is published by IAB Tech Lab: [Content Taxonomy](https://iabtechlab.com/standards/content-taxonomy/).
 
 > **Databricks:** The `DATABRICKS_*` variables are optional. The Databricks export button (`GET /api/databricks` status check) is always available in the UI, but running the SQL statement requires a configured warehouse.
 
@@ -135,6 +143,14 @@ DATABRICKS_SCHEMA=default
 2. Navigate to **Storage** → **Blob**
 3. Create a new Blob store
 4. Copy the `BLOB_READ_WRITE_TOKEN` from the store's settings
+
+### OpenAI API Key (`OPENAI_API_KEY`)
+
+1. Go to [platform.openai.com](https://platform.openai.com/) and sign in
+2. Open **API keys** and create a key with access to the **Embeddings** API
+3. Set `OPENAI_API_KEY` in `.env.local`
+
+This app uses **`text-embedding-3-small`** only (no chat completions required for taxonomy matching). The key powers [`src/app/api/adInventoryIabSemantic/route.js`](src/app/api/adInventoryIabSemantic/route.js): each Pegasus 1.5 scene description is embedded and compared with cosine similarity to rows in [`taxonomy_embeds.json`](https://github.com/nathanchess/twelvelabs-context-ad-engine/blob/main/taxonomy_embeds.json) to resolve the exact **Content Taxonomy 3.1** node id (`iab_id`).
 
 ---
 
@@ -171,6 +187,7 @@ src/app/
 │   ├── affinityMatching/route.js     # User → ad affinity scoring
 │   ├── generateAdPlan/route.js       # Two-pass cast + scene analysis
 │   ├── generateVideoSummary/route.js # Quick Pegasus ad summary
+│   ├── adInventoryIabSemantic/route.js # Pegasus 1.5 scenes + OpenAI embed → CT 3.1 ids
 │   ├── hls-proxy/route.js            # Same-origin HLS proxy for CloudFront
 │   └── databricks/
 │       ├── route.js                  # GET — checks Databricks config status

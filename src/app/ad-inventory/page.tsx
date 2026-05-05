@@ -3,6 +3,8 @@
 import { useState, useEffect, useMemo } from "react";
 import Link from "next/link";
 import AddCategoryModal from "../components/AddCategoryModal";
+import ScrollFadeUp from "../components/ScrollFadeUp";
+import ScrollProgressBar from "../components/ScrollProgressBar";
 import { getCategories, type AdCategory } from "../lib/adInventoryStore";
 import { useVideos } from "../lib/videoCache";
 
@@ -94,11 +96,16 @@ export default function AdInventoryPage() {
 
     return (
         <div className="min-h-screen bg-white">
+            <ScrollProgressBar />
+
+            <ScrollFadeUp order={0}>
             <header className="border-b border-border-light px-8 py-6">
                 <h1 className="text-[32px] font-bold tracking-[-1.5px] text-text-primary">Ad Inventory</h1>
                 <p className="text-sm text-text-secondary mt-1">Manage and match ads to your video content.</p>
             </header>
+            </ScrollFadeUp>
 
+            <ScrollFadeUp order={1}>
             {/* ── Search Bar + Add Category ─────────────────────── */}
             <div className="px-8 pt-6 pb-2">
                 <div className="flex items-center justify-between">
@@ -134,7 +141,9 @@ export default function AdInventoryPage() {
                     </button>
                 </div>
             </div>
+            </ScrollFadeUp>
 
+            <ScrollFadeUp order={2}>
             {/* ── Ad Cards Grid ─────────────────────────────────── */}
             <div className="px-8 py-6">
                 {filteredAds.length > 0 ? (
@@ -220,6 +229,7 @@ export default function AdInventoryPage() {
                     </div>
                 )}
             </div>
+            </ScrollFadeUp>
 
             <AddCategoryModal
                 open={showAddModal}
