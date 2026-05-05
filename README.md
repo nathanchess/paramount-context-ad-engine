@@ -6,6 +6,12 @@ A full-stack contextual ad placement engine for broadcast and streaming content.
 
 **Live Demo Application:** [https://twelvelabs-contextual-ads.vercel.app/]
 
+## Walkthrough video
+
+[![Watch the full application walkthrough on YouTube](https://img.youtube.com/vi/br_Hdc3yCY0/maxresdefault.jpg)](https://youtu.be/br_Hdc3yCY0)
+
+**[Watch on YouTube — full walkthrough of the Contextual Ad Engine](https://youtu.be/br_Hdc3yCY0)**
+
 ---
 
 ## Architecture Overview
